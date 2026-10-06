@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Real War: Reforged</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <main id="field">
+      <canvas id="view"></canvas>
+      <div id="message"></div>
+      <div id="status"></div>
+    </main>
+
+    <aside id="sidebar">
+      <header class="topbar">
+        <div>
+          <div class="label">Funds</div>
+          <div id="credits">$0</div>
+        </div>
+        <div class="right">
+          <div id="clock">0:00</div>
+          <button id="btn-menu" class="small" title="Menu / pause">Menu</button>
+        </div>
+      </header>
+      <canvas id="minimap" width="220" height="220"></canvas>
+      <section>
+        <h2>Structures</h2>
+        <div id="build-list" class="grid"></div>
+      </section>
+      <section>
+        <h2>Forces</h2>
+        <div id="unit-list" class="grid"></div>
+      </section>
+      <section>
+        <h2>Selection</h2>
+        <div id="selection"></div>
+      </section>
+    </aside>
+
+    <div id="menu" class="overlay">
+      <div class="panel">
+        <h1>REAL WAR <span>Reforged</span></h1>
+        <p class="tagline">Modern combined-arms warfare. Land, sea and air.</p>
+        <div class="form">
+          <label>Opponent
+            <select id="difficulty">
+              <option value="easy">Easy</option>
+              <option value="normal" selected>Normal</option>
+              <option value="hard">Hard</option>
+            </select>
+          </label>
+          <label>Map seed
+            <input id="seed" placeholder="random">
+          </label>
+        </div>
+        <div class="buttons">
+          <button id="start" class="primary">Start Mission</button>
+          <button id="resume" class="hidden">Resume</button>
+        </div>
+        <details>
+          <summary>Field manual</summary>
+          <ul class="help">
+            <li><b>Left-click / drag</b> select units · <b>Shift</b> add · <b>double-click</b> select type</li>
+            <li><b>Right-click</b> move, attack, harvest oil or set rally point</li>
+            <li><b>A</b> + click attack-move · <b>S</b> stop · <b>H</b> jump to HQ</li>
+            <li><b>Ctrl+1–9</b> make group · <b>1–9</b> recall (twice to center)</li>
+            <li><b>Arrows</b> / screen edge / middle-drag scroll · <b>wheel</b> zoom</li>
+            <li><b>P</b> pause · <b>+/-</b> game speed · <b>M</b> mute · <b>Del</b> sell structure</li>
+            <li>Supply Trucks pump oil from wells and haul it to your Command Center or a Supply Depot.</li>
+            <li>Shift-click a unit button to queue five; right-click to cancel.</li>
+            <li>Destroy every enemy structure to win.</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+
+    <div id="endscreen" class="overlay hidden">
+      <div class="panel">
+        <h1 id="end-title"></h1>
+        <table id="end-stats"></table>
+        <div class="buttons"><button id="again" class="primary">Main menu</button></div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
