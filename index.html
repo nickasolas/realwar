@@ -5,11 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Real War: Reforged</title>
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
 </head>
 <body>
   <div id="app">
     <main id="field">
       <canvas id="view"></canvas>
+      <canvas id="overlay"></canvas>
       <div id="message"></div>
       <div id="status"></div>
     </main>
@@ -52,6 +56,12 @@
               <option value="hard">Hard</option>
             </select>
           </label>
+          <label>Graphics
+            <select id="quality">
+              <option value="high" selected>High (shadows, AO, bloom)</option>
+              <option value="low">Performance</option>
+            </select>
+          </label>
           <label>Map seed
             <input id="seed" placeholder="random">
           </label>
@@ -67,7 +77,7 @@
             <li><b>Right-click</b> move, attack, harvest oil or set rally point</li>
             <li><b>A</b> + click attack-move · <b>S</b> stop · <b>H</b> jump to HQ</li>
             <li><b>Ctrl+1–9</b> make group · <b>1–9</b> recall (twice to center)</li>
-            <li><b>Arrows</b> / screen edge / middle-drag scroll · <b>wheel</b> zoom</li>
+            <li><b>Arrows</b> / screen edge / middle-drag scroll · <b>wheel</b> or <b>PgUp/PgDn</b> zoom</li>
             <li><b>P</b> pause · <b>+/-</b> game speed · <b>M</b> mute · <b>Del</b> sell structure</li>
             <li>Supply Trucks pump oil from wells and haul it to your Command Center or a Supply Depot.</li>
             <li>Shift-click a unit button to queue five; right-click to cancel.</li>
@@ -76,6 +86,8 @@
         </details>
       </div>
     </div>
+
+    <div id="loading" class="overlay hidden"><div class="loading-text">Deploying forces…</div></div>
 
     <div id="endscreen" class="overlay hidden">
       <div class="panel">

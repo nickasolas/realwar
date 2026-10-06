@@ -32,6 +32,8 @@ export class GameMap {
     this.w = w;
     this.h = h;
     this.tiles = new Uint8Array(w * h);
+    // Raw generator elevation (0..1), used for cosmetic terrain relief.
+    this.elev = new Float32Array(w * h);
     // Building occupancy: entity id + 1 for each covered tile, 0 when free.
     this.occupied = new Int32Array(w * h);
     this.wells = [];
@@ -141,6 +143,7 @@ export function generateMap(seed, w = 96, h = 96) {
         t = m > 0.66 ? Terrain.FOREST : Terrain.GRASS;
       }
       map.tiles[y * w + x] = t;
+      map.elev[y * w + x] = e;
     }
   }
 

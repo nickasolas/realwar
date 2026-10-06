@@ -366,9 +366,10 @@ export class Game {
       tx, ty, targetId: target.id, owner: shooter.owner, weapon: weaponKey,
       speed: weapon.speed, homing: !weapon.arc,
       air: target.kind === 'unit' && target.def.domain === 'air',
+      fromAir: shooter.kind === 'unit' && shooter.def.domain === 'air',
       shooterId: shooter.id,
     });
-    this.events.push({ type: 'fire', fx: weapon.fx, x: shooter.x, y: shooter.y, owner: shooter.owner });
+    this.events.push({ type: 'fire', fx: weapon.fx, x: shooter.x, y: shooter.y, owner: shooter.owner, shooterId: shooter.id });
   }
 
   // Try to shoot `target` with the entity's weapons. Returns true if in range.

@@ -1,20 +1,22 @@
-import { TILE, DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, WEAPONS } from './config.js';
+import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, WEAPONS } from './config.js';
 import { Game } from './sim.js';
 import { AIController } from './ai.js';
-import { Renderer } from './render.js';
+import { Renderer3D, CAMERA } from './gfx/renderer3d.js';
 import { Audio } from './audio.js';
 
 const ME = 0;
 const $ = (id) => document.getElementById(id);
 
 const view = $('view');
+const overlay = $('overlay');
 const minimap = $('minimap');
 const mctx = minimap.getContext('2d');
 const audio = new Audio();
 
 let game, renderer, ai;
 let running = false, paused = false, speed = 1;
-const cam = { x: 0, y: 0, zoom: 1 };
+// Camera target in tile coordinates; zoom is the camera distance.
+const cam = { x: 0, y: 0, zoom: CAMERA.defaultDist };
 const ui = {
   selected: new Set(), drag: null, placing: null, placeTile: { tx: 0, ty: 0 },
   attackMove: false, markers: [], hoverId: null, groups: {}, lastGroupKey: null, lastGroupTime: 0,
@@ -27,22 +29,32 @@ let lastUnderAttack = -999;
 
 function startGame() {
   const difficulty = $('difficulty').value;
+  const quality = $('quality').value;
   const seedInput = $('seed').value.trim();
   const seed = seedInput ? hashSeed(seedInput) : Math.floor(Math.random() * 1e9);
-  game = new Game({ seed, players: [{ ai: false }, { ai: true }] });
-  ai = new AIController(game, 1, difficulty);
-  renderer = new Renderer(view, game, ME);
-  ui.selected.clear();
-  ui.placing = null;
-  ui.groups = {};
-  const hq = [...game.entities.values()].find((e) => e.owner === ME && e.type === 'hq');
-  centerOn(hq.x, hq.y);
-  $('menu').classList.add('hidden');
-  $('endscreen').classList.add('hidden');
-  running = true;
-  paused = false;
-  audio.unlock();
-  notify(`Commander, the ${game.players[ME].faction.name} awaits your orders. Seed ${seed}.`);
+  $('loading').classList.remove('hidden');
+  // Let the loading text paint before the heavy world build.
+  setTimeout(() => {
+    game = new Game({ seed, players: [{ ai: false }, { ai: true }] });
+    ai = new AIController(game, 1, difficulty);
+    renderer?.dispose();
+    renderer = new Renderer3D(view, overlay, game, ME, quality);
+    resize();
+    ui.selected.clear();
+    ui.placing = null;
+    ui.groups = {};
+    sidebar.build._html = sidebar.units._html = null;
+    const hq = [...game.entities.values()].find((e) => e.owner === ME && e.type === 'hq');
+    cam.zoom = CAMERA.defaultDist;
+    centerOn(hq.x + 1, hq.y + 2);
+    $('loading').classList.add('hidden');
+    $('menu').classList.add('hidden');
+    $('endscreen').classList.add('hidden');
+    running = true;
+    paused = false;
+    audio.unlock();
+    notify(`Commander, the ${game.players[ME].faction.name} awaits your orders. Seed ${seed}.`);
+  }, 30);
 }
 
 function hashSeed(str) {
@@ -53,75 +65,56 @@ function hashSeed(str) {
 }
 
 function resize() {
-  const dpr = 1; // keep pixel-art-ish crispness and performance predictable
-  view.width = view.clientWidth * dpr;
-  view.height = view.clientHeight * dpr;
-  clampCamera();
+  if (renderer) renderer.resize(view.clientWidth, view.clientHeight);
 }
 window.addEventListener('resize', resize);
 
 // ----------------------------------------------------------------- camera
 
-function viewSize() { return { w: view.width / cam.zoom, h: view.height / cam.zoom }; }
-
 function clampCamera() {
   if (!game) return;
-  const { w, h } = viewSize();
-  const mw = game.map.w * TILE, mh = game.map.h * TILE;
-  cam.x = Math.max(-64, Math.min(mw - w + 64, cam.x));
-  cam.y = Math.max(-64, Math.min(mh - h + 64, cam.y));
+  cam.zoom = Math.max(CAMERA.minDist, Math.min(CAMERA.maxDist, cam.zoom));
+  cam.x = Math.max(2, Math.min(game.map.w - 2, cam.x));
+  cam.y = Math.max(2, Math.min(game.map.h + 2, cam.y));
 }
 
 function centerOn(tx, ty) {
-  const { w, h } = viewSize();
-  cam.x = tx * TILE - w / 2;
-  cam.y = ty * TILE - h / 2;
+  cam.x = tx;
+  cam.y = ty;
   clampCamera();
 }
 
+// Screen pixel -> tile coordinates on the ground.
 function screenToWorld(sx, sy) {
-  return { x: (sx / cam.zoom + cam.x) / TILE, y: (sy / cam.zoom + cam.y) / TILE };
+  return renderer.pickGround(sx, sy) || { x: cam.x, y: cam.y };
 }
 
 function updateCamera(dt) {
-  const pan = 900 * dt / cam.zoom;
+  const pan = cam.zoom * 1.1 * dt;
   if (keys.has('ArrowLeft')) cam.x -= pan;
   if (keys.has('ArrowRight')) cam.x += pan;
   if (keys.has('ArrowUp')) cam.y -= pan;
   if (keys.has('ArrowDown')) cam.y += pan;
+  if (keys.has('PageUp')) cam.zoom -= cam.zoom * dt;
+  if (keys.has('PageDown')) cam.zoom += cam.zoom * dt;
   if (mouse.inside && mouse.x >= 0 && !ui.drag && !mouse.middle && document.hasFocus()) {
     const m = 10;
     if (mouse.x < m) cam.x -= pan;
-    if (mouse.x > view.width - m) cam.x += pan;
+    if (mouse.x > view.clientWidth - m) cam.x += pan;
     if (mouse.y < m) cam.y -= pan;
-    if (mouse.y > view.height - m) cam.y += pan;
+    if (mouse.y > view.clientHeight - m) cam.y += pan;
   }
   clampCamera();
 }
 
 // -------------------------------------------------------------- selection
 
-function entityAt(wx, wy) {
-  let best = null, bestD = Infinity;
-  for (const e of game.entities.values()) {
-    if (e.owner !== ME && !game.isVisibleTo(ME, e)) continue;
-    if (e.kind === 'unit') {
-      const air = e.def.domain === 'air' ? 14 / TILE : 0;
-      const d = Math.hypot(e.x - wx, e.y + -air - wy);
-      if (d < e.radius + 0.35 && d < bestD) { bestD = d; best = e; }
-    }
-  }
-  if (best) return best;
-  for (const e of game.entities.values()) {
-    if (e.kind !== 'building') continue;
-    if (e.owner !== ME && !game.isVisibleTo(ME, e)) continue;
-    if (wx >= e.tx && wx < e.tx + e.w && wy >= e.ty && wy < e.ty + e.h) return e;
-  }
-  return null;
+function entityAt(sx, sy) {
+  return renderer.entityAt(sx, sy);
 }
 
 function wellAt(wx, wy) {
-  return game.map.wells.findIndex((w) => w.amount > 0 && Math.hypot(w.x + 0.5 - wx, w.y + 0.5 - wy) < 0.8);
+  return game.map.wells.findIndex((w) => w.amount > 0 && Math.hypot(w.x + 0.5 - wx, w.y + 0.5 - wy) < 0.9);
 }
 
 function selectedEntities() {
@@ -133,13 +126,7 @@ function myUnits() {
 }
 
 function boxSelect(x0, y0, x1, y1, additive) {
-  const a = screenToWorld(Math.min(x0, x1), Math.min(y0, y1));
-  const b = screenToWorld(Math.max(x0, x1), Math.max(y0, y1));
-  const picked = [];
-  for (const e of game.entities.values()) {
-    if (e.owner !== ME || e.kind !== 'unit') continue;
-    if (e.x >= a.x && e.x <= b.x && e.y >= a.y && e.y <= b.y) picked.push(e);
-  }
+  const picked = renderer.unitsInRect(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), ME);
   // Prefer combat units when trucks are mixed in.
   const combat = picked.filter((e) => !e.def.harvester);
   const final = combat.length ? combat : picked;
@@ -147,16 +134,14 @@ function boxSelect(x0, y0, x1, y1, additive) {
   for (const e of final) ui.selected.add(e.id);
 }
 
-function clickSelect(wx, wy, additive, double) {
-  const e = entityAt(wx, wy);
+function clickSelect(sx, sy, additive, double) {
+  const e = entityAt(sx, sy);
   if (!additive) ui.selected.clear();
   if (!e) return;
   if (double && e.owner === ME) {
     // Select every unit of this type on screen.
-    const { w, h } = viewSize();
-    const x0 = cam.x / TILE, y0 = cam.y / TILE, x1 = x0 + w / TILE, y1 = y0 + h / TILE;
     for (const o of game.entities.values()) {
-      if (o.owner === ME && o.type === e.type && o.x >= x0 && o.x <= x1 && o.y >= y0 && o.y <= y1) ui.selected.add(o.id);
+      if (o.owner === ME && o.type === e.type && renderer.onScreen(o)) ui.selected.add(o.id);
     }
     return;
   }
@@ -166,10 +151,9 @@ function clickSelect(wx, wy, additive, double) {
 
 // ---------------------------------------------------------------- orders
 
-function issueContextOrder(wx, wy) {
+function issueContextOrder(wx, wy, target = null) {
   const units = myUnits();
   const sel = selectedEntities();
-  const target = entityAt(wx, wy);
   if (!units.length) {
     const b = sel.find((e) => e.kind === 'building' && e.owner === ME && e.def.produces);
     if (b) { game.cmdRally(ME, b.id, wx, wy); marker(wx, wy, '#7dff8a'); }
@@ -204,7 +188,7 @@ function issueContextOrder(wx, wy) {
   }
 }
 
-function marker(x, y, color) { ui.markers.push({ x, y, color, life: 0.6 }); }
+function marker(x, y, color) { ui.markers.push({ x, y, color }); }
 
 function attackMoveTo(wx, wy) {
   const ids = myUnits().filter((u) => u.def.weapon).map((u) => u.id);
@@ -219,19 +203,19 @@ view.addEventListener('contextmenu', (e) => e.preventDefault());
 
 view.addEventListener('pointermove', (e) => {
   mouse.x = e.offsetX; mouse.y = e.offsetY; mouse.inside = true;
-  if (!game) return;
+  if (!game || !renderer) return;
   if (mouse.middle) {
-    cam.x = mouse.middle.cx - (e.offsetX - mouse.middle.x) / cam.zoom;
-    cam.y = mouse.middle.cy - (e.offsetY - mouse.middle.y) / cam.zoom;
-    clampCamera();
+    // Keep the grabbed ground point under the cursor.
+    const g = renderer.pickGround(e.offsetX, e.offsetY);
+    if (g) { cam.x += mouse.middle.gx - g.x; cam.y += mouse.middle.gy - g.y; clampCamera(); renderer.applyCamera(cam); }
   }
   if (ui.drag) { ui.drag.x1 = e.offsetX; ui.drag.y1 = e.offsetY; }
-  const w = screenToWorld(e.offsetX, e.offsetY);
   if (ui.placing) {
+    const w = screenToWorld(e.offsetX, e.offsetY);
     const def = BUILDINGS[ui.placing];
     ui.placeTile = { tx: Math.round(w.x - def.w / 2), ty: Math.round(w.y - def.h / 2) };
   }
-  const hov = entityAt(w.x, w.y);
+  const hov = entityAt(e.offsetX, e.offsetY);
   ui.hoverId = hov ? hov.id : null;
   view.classList.toggle('cursor-target', !!(hov && hov.owner !== ME && myUnits().length));
 });
@@ -245,14 +229,14 @@ view.addEventListener('pointerdown', (e) => {
   view.setPointerCapture(e.pointerId);
   const w = screenToWorld(e.offsetX, e.offsetY);
   if (e.button === 1) {
-    mouse.middle = { x: e.offsetX, y: e.offsetY, cx: cam.x, cy: cam.y };
+    mouse.middle = { gx: w.x, gy: w.y };
     e.preventDefault();
     return;
   }
   if (e.button === 2) {
     if (ui.placing) { ui.placing = null; return; }
     if (ui.attackMove) { ui.attackMove = false; view.classList.remove('cursor-attack'); return; }
-    issueContextOrder(w.x, w.y);
+    issueContextOrder(w.x, w.y, entityAt(e.offsetX, e.offsetY));
     return;
   }
   if (ui.placing) {
@@ -281,19 +265,22 @@ view.addEventListener('pointerup', (e) => {
     const now = performance.now();
     const dbl = now - lastClick.t < 320 && Math.abs(lastClick.x - e.offsetX) < 6 && Math.abs(lastClick.y - e.offsetY) < 6;
     lastClick = { t: now, x: e.offsetX, y: e.offsetY };
-    const w = screenToWorld(e.offsetX, e.offsetY);
-    clickSelect(w.x, w.y, d.shift, dbl);
+    clickSelect(e.offsetX, e.offsetY, d.shift, dbl);
   }
   refreshSidebar(true);
 });
 
 view.addEventListener('wheel', (e) => {
-  if (!game) return;
+  if (!game || !renderer) return;
   e.preventDefault();
+  // Zoom toward the point under the cursor.
   const before = screenToWorld(e.offsetX, e.offsetY);
-  cam.zoom = Math.max(0.45, Math.min(1.6, cam.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  cam.x = before.x * TILE - e.offsetX / cam.zoom;
-  cam.y = before.y * TILE - e.offsetY / cam.zoom;
+  const f = e.deltaY < 0 ? 1 / 1.12 : 1.12;
+  const old = cam.zoom;
+  cam.zoom = Math.max(CAMERA.minDist, Math.min(CAMERA.maxDist, cam.zoom * f));
+  const k = 1 - cam.zoom / old;
+  cam.x += (before.x - cam.x) * k;
+  cam.y += (before.y - cam.y) * k;
   clampCamera();
 }, { passive: false });
 
@@ -579,7 +566,7 @@ let acc = 0, last = performance.now(), sidebarTimer = 0;
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (game) {
+  if (game && renderer) {
     updateCamera(dt);
     if (running && !paused) {
       acc += dt * speed;
@@ -596,11 +583,10 @@ function frame(now) {
         if (game.winner !== null) { showEnd(); break; }
       }
     }
-    const { w, h } = viewSize();
-    audio.setListener((cam.x + w / 2) / TILE, (cam.y + h / 2) / TILE, Math.max(w, h) / TILE);
+    audio.setListener(cam.x, cam.y, cam.zoom * 1.4);
     for (const id of ui.selected) if (!game.get(id)) ui.selected.delete(id);
     renderer.render(cam, ui, paused ? 1 : Math.min(1, acc / DT), paused ? 0 : dt);
-    renderer.renderMinimap(mctx, minimap.width, cam, w, h);
+    renderer.renderMinimap(mctx, minimap.width);
     sidebarTimer -= dt;
     if (sidebarTimer <= 0) { refreshSidebar(); sidebarTimer = 0.15; }
     $('status').textContent = paused ? 'PAUSED' : speed !== 1 ? `${speed}x` : '';
@@ -621,4 +607,4 @@ resize();
 requestAnimationFrame(frame);
 
 // Exposed for debugging from the console.
-window.__rw = { get game() { return game; }, cam, ui };
+window.__rw = { get game() { return game; }, get renderer() { return renderer; }, cam, ui };
