@@ -1,8 +1,9 @@
 import {
   DT, TICK_RATE, UNITS, BUILDINGS, WEAPONS, FACTIONS, STARTING_CREDITS,
-  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR,
+  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR, ROAD, MAX_LINE,
 } from './config.js';
 import { generateMap } from './map.js';
+import { Terrain } from './config.js';
 import { findPath } from './path.js';
 import { createRng } from './rng.js';
 
@@ -85,6 +86,7 @@ export class Game {
       progress: complete ? 1 : 0, queue: [], rally: null, cooldown: 0, target: null,
     };
     this.map.setOccupied(tx, ty, def.w, def.h, b.id);
+    if (def.gate) this.setGate(b, owner);
     this.entities.set(b.id, b);
     return b;
   }
@@ -272,14 +274,74 @@ export class Game {
   cmdPlace(playerId, type, tx, ty) {
     const p = this.players[playerId];
     const def = BUILDINGS[type];
-    if (!def || p.constructing) return null;
+    if (!def || (p.constructing && !def.segment)) return null;
     if (!this.canBuildType(playerId, type)) return null;
     if (p.credits < def.cost) return null;
+    // A gate dropped onto one of your own wall segments replaces it.
+    if (def.gate && this.map.inBounds(tx, ty)) {
+      const under = this.get(this.map.occupied[ty * this.map.w + tx]);
+      if (under && under.owner === playerId && under.type === 'wall') this.destroy(under, null, true);
+    }
     if (!this.canPlace(playerId, type, tx, ty)) return null;
     p.credits -= def.cost;
     const b = this.addBuilding(playerId, type, tx, ty, false);
-    p.constructing = b.id;
+    if (!def.segment) p.constructing = b.id;
     return b;
+  }
+
+  // Place a run of wall (or gate) segments along a list of tiles. Skips
+  // tiles that can't be built on and stops when funds run out.
+  cmdPlaceLine(playerId, type, tiles) {
+    const def = BUILDINGS[type];
+    if (!def?.segment) return 0;
+    let n = 0;
+    for (const { x, y } of tiles.slice(0, MAX_LINE)) {
+      if (this.players[playerId].credits < def.cost) break;
+      if (this.cmdPlace(playerId, type, x, y)) n++;
+    }
+    return n;
+  }
+
+  canBuildRoad(playerId, x, y) {
+    const m = this.map;
+    if (!m.inBounds(x, y) || m.road[y * m.w + x] || m.occupied[y * m.w + x]) return false;
+    const t = m.get(x, y);
+    if (t !== Terrain.GRASS && t !== Terrain.SAND && t !== Terrain.FOREST) return false;
+    return this.inBuildRadius(playerId, x, y, 1, 1);
+  }
+
+  // Lay road tiles (instant). Returns how many were built.
+  cmdBuildRoad(playerId, tiles) {
+    const p = this.players[playerId];
+    if (!ROAD.requires.every((r) => this.hasBuilding(playerId, r))) return 0;
+    let n = 0;
+    for (const { x, y } of tiles.slice(0, MAX_LINE)) {
+      if (p.credits < ROAD.cost) break;
+      if (!this.canBuildRoad(playerId, x, y)) continue;
+      p.credits -= ROAD.cost;
+      this.map.road[y * this.map.w + x] = 1;
+      n++;
+    }
+    if (n) {
+      this.map.roadVersion++;
+      this.events.push({ type: 'roadBuilt', owner: playerId, count: n });
+    }
+    return n;
+  }
+
+  setGate(b, owner) {
+    for (let y = b.ty; y < b.ty + b.h; y++) for (let x = b.tx; x < b.tx + b.w; x++) this.map.gateOwner[y * this.map.w + x] = owner;
+  }
+
+  // Nearest enemy wall or gate, used by armies to breach a blocked route.
+  findBlockingWall(u, radius = 8) {
+    let best = null, bestD = radius;
+    for (const e of this.entities.values()) {
+      if (e.kind !== 'building' || !e.def.segment || e.owner === u.owner) continue;
+      const d = this.distTo(u, e);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
   }
 
   // Sell a structure for half its cost.
@@ -296,7 +358,7 @@ export class Game {
   setPath(u, x, y) {
     const sx = Math.floor(u.x), sy = Math.floor(u.y);
     const gx = Math.floor(x), gy = Math.floor(y);
-    const path = findPath(this.map, sx, sy, gx, gy, u.def.domain);
+    const path = findPath(this.map, sx, sy, gx, gy, u.def.domain, undefined, true, u.owner);
     u.pathGoal = { x, y };
     if (!path) { u.path = []; return; }
     const pts = path.map((p) => ({ x: p.x + 0.5, y: p.y + 0.5 }));
@@ -305,7 +367,7 @@ export class Game {
     if (u.def.domain === 'air' || (last && last.x === gx && last.y === gy)) {
       if (pts.length) pts[pts.length - 1] = { x, y };
     }
-    if (!pts.length && this.map.passable(gx, gy, u.def.domain)) pts.push({ x, y });
+    if (!pts.length && this.map.passable(gx, gy, u.def.domain, u.owner)) pts.push({ x, y });
     u.path = pts;
     u.repathAt = this.tick + TICK_RATE * 2;
   }
@@ -315,7 +377,7 @@ export class Game {
     if (!u.path || !u.path.length) return true;
     const wp = u.path[0];
     // Re-route if a new structure now blocks the way.
-    if (u.def.domain !== 'air' && !this.map.passable(Math.floor(wp.x), Math.floor(wp.y), u.def.domain)) {
+    if (u.def.domain !== 'air' && !this.map.passable(Math.floor(wp.x), Math.floor(wp.y), u.def.domain, u.owner)) {
       const goal = u.path[u.path.length - 1];
       this.setPath(u, goal.x, goal.y);
       return !u.path.length;
@@ -366,7 +428,7 @@ export class Game {
 
   nudge(u, dx, dy) {
     const nx = u.x + dx, ny = u.y + dy;
-    if (this.map.passable(Math.floor(nx), Math.floor(ny), u.def.domain)) { u.x = nx; u.y = ny; }
+    if (this.map.passable(Math.floor(nx), Math.floor(ny), u.def.domain, u.owner)) { u.x = nx; u.y = ny; }
   }
 
   // --------------------------------------------------------------- combat
@@ -375,6 +437,7 @@ export class Game {
     let best = null, bestScore = Infinity;
     for (const o of this.entities.values()) {
       if (o.owner === e.owner || !canHit(weapon, o)) continue;
+      if (o.kind === 'building' && o.def.segment) continue;
       const d = this.distTo(e, o);
       if (d > radius) continue;
       if (!this.isVisibleTo(e.owner, o)) continue;
@@ -441,6 +504,7 @@ export class Game {
     e.hp = 0;
     if (e.kind === 'building') {
       this.map.setOccupied(e.tx, e.ty, e.w, e.h, 0);
+      if (e.def.gate) this.setGate(e, -1);
       const p = this.players[e.owner];
       if (p.constructing === e.id) p.constructing = null;
     }
@@ -500,7 +564,12 @@ export class Game {
       }
       case 'attack': {
         const t = this.get(o.targetId);
-        if (!t) { u.order = { type: 'idle' }; u.path = null; break; }
+        if (!t) {
+          // Breach made: carry on to where we were going.
+          if (o.resume) { u.order = { type: 'attackMove', dest: o.resume }; this.setPath(u, o.resume.x, o.resume.y); } else u.order = { type: 'idle' };
+          u.path = o.resume ? u.path : null;
+          break;
+        }
         const w = this.primaryWeaponFor(u, t);
         if (!w) { u.order = { type: 'idle' }; break; }
         const d = this.distTo(u, t);
@@ -546,7 +615,11 @@ export class Game {
         }
         if (o.type === 'attackMove') {
           if (!u.path || u.pathGoal?.x !== o.dest.x || u.pathGoal?.y !== o.dest.y) this.setPath(u, o.dest.x, o.dest.y);
-          if (this.followPath(u)) u.order = { type: 'idle', home: { x: u.x, y: u.y } };
+          if (this.followPath(u)) {
+            // Walled off short of the goal: knock down the nearest enemy wall.
+            const wall = u.def.domain === 'ground' && u.def.weapon && Math.hypot(u.x - o.dest.x, u.y - o.dest.y) > 2.5 ? this.findBlockingWall(u) : null;
+            u.order = wall ? { type: 'attack', targetId: wall.id, resume: o.dest } : { type: 'idle', home: { x: u.x, y: u.y } };
+          }
         } else if (o.home && Math.hypot(u.x - o.home.x, u.y - o.home.y) > 0.6) {
           this.moveToward(u, o.home.x, o.home.y);
         }
@@ -781,7 +854,7 @@ export class Game {
       if (p.defeated) continue;
       let hasBuilding = false;
       for (const e of this.entities.values()) {
-        if (e.owner === p.id && e.kind === 'building') { hasBuilding = true; break; }
+        if (e.owner === p.id && e.kind === 'building' && !e.def.segment) { hasBuilding = true; break; }
       }
       if (!hasBuilding) {
         p.defeated = true;

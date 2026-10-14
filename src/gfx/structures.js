@@ -308,7 +308,56 @@ function samLauncher(p) {
   p.box(0.08, 0.05, 0.005, 'team', { x: -0.06, y: 0.12, z: 0.073 });
 }
 
+// Concrete T-wall: a centre post plus an arm toward each connected
+// neighbour (E, SE, S, SW, W, NW, N, NE). The renderer toggles arms.
+const WALL_DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+function wallPost(p) {
+  p.box(0.62, 1.2, 0.62, C.concreteDark, { y: -0.52, surf: 'concrete' });
+  p.cbox(0.26, 0.5, 0.26, C.concrete, { y: 0.35, surf: 'concrete' }, 0.015);
+  p.cbox(0.3, 0.04, 0.3, C.concreteDark, { y: 0.61, surf: 'concrete' }, 0.008);
+  p.box(0.27, 0.03, 0.27, 'team', { y: 0.5 });
+}
+
+function wallArm(p, len) {
+  // Slab from the post centre to the tile edge (or corner), with a coil of
+  // razor wire along the top.
+  p.cbox(len, 0.42, 0.14, C.concrete, { x: len / 2, y: 0.31, surf: 'concrete' }, 0.012);
+  p.box(len, 0.06, 0.24, C.concreteDark, { x: len / 2, y: 0.13, surf: 'concrete' });
+  for (let i = 0; i < Math.round(len / 0.07); i++) {
+    p.rod([0.035 + i * 0.07, 0.53, -0.03], [0.07 + i * 0.07, 0.56, 0.03], 0.004, '#8a8d86');
+  }
+}
+
+function gatePosts(p) {
+  p.box(1.0, 0.04, 0.62, C.concreteDark, { y: 0.11, surf: 'concrete' });
+  for (const s of [-1, 1]) {
+    p.box(0.3, 1.2, 0.62, C.concreteDark, { x: s * 0.42, y: -0.52, surf: 'concrete' });
+    p.cbox(0.18, 0.62, 0.3, C.concrete, { x: s * 0.42, y: 0.41, surf: 'concrete' }, 0.015);
+    p.box(0.19, 0.04, 0.31, 'team', { x: s * 0.42, y: 0.66 });
+    p.light(0.025, '#ffb43a', { x: s * 0.42, y: 0.75 });
+  }
+  for (let k = 0; k < 6; k++) p.box(0.1, 0.005, 0.12, k % 2 ? '#222' : C.yellow, { x: -0.28 + k * 0.11, y: 0.135 });
+}
+
+function gateLeaf(p) {
+  // Steel bar gate that sinks into the ground to open.
+  p.box(0.66, 0.04, 0.05, C.steel, { y: 0.48, surf: 'metal' });
+  p.box(0.66, 0.04, 0.05, C.steel, { y: 0.16, surf: 'metal' });
+  for (let i = 0; i < 9; i++) p.box(0.022, 0.36, 0.022, C.steel, { x: -0.3 + i * 0.075, y: 0.32 });
+  p.rod([-0.3, 0.16, 0], [0.3, 0.48, 0], 0.012, C.steel);
+}
+
+function roadIcon(p) {
+  p.box(1.2, 0.05, 1.2, '#7a6a52', { y: 0.0 });
+  p.box(0.6, 0.06, 1.2, '#3b3c39', { y: 0.01, surf: 'concrete' });
+  for (const z of [-0.4, 0, 0.4]) p.box(0.04, 0.065, 0.2, '#e8e2c8', { y: 0.012, z });
+}
+
 const STRUCTURES = {
+  wall: { body: wallPost },
+  gate: { body: gatePosts },
+  road: { body: roadIcon },
   hq: { body: hq, dish: [hqDish, 0.25, 0.72, -0.5] },
   refinery: { body: refinery },
   barracks: { body: barracks },
@@ -334,6 +383,21 @@ export function buildStructure(type, owner, w, h) {
     root.add(parts[name]);
   }
   if (spec.smoke) parts.smoke = spec.smoke.map(([x, y, z]) => new THREE.Vector3(x, y, z));
+  if (type === 'wall') {
+    parts.arms = WALL_DIRS.map(([dx, dz], i) => {
+      const diag = dx !== 0 && dz !== 0;
+      const arm = cached(`${key}:arm${diag ? 'd' : 'o'}`, team, (p) => wallArm(p, diag ? Math.SQRT2 * 0.5 : 0.5));
+      arm.rotation.y = -Math.atan2(dz, dx);
+      arm.visible = false;
+      root.add(arm);
+      return arm;
+    });
+    parts.dirs = WALL_DIRS;
+  }
+  if (type === 'gate') {
+    parts.leaf = cached(`${key}:leaf`, team, gateLeaf);
+    root.add(parts.leaf);
+  }
   const wrap = new THREE.Group();
   wrap.add(root);
   return { root: wrap, body: root, ...parts };

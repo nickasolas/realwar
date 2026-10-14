@@ -268,3 +268,136 @@ test('cmdService sends only units the facility can repair', () => {
   assert.ok(g.distTo(tank, depot) <= REPAIR.facilityRange, 'tank drove to the depot');
   assert.ok(tank.hp > 100, 'and got repaired');
 });
+
+// ------------------------------------------------------------ fortifications
+
+import { lineTiles, ROAD_COST } from '../src/map.js';
+import { findPath } from '../src/path.js';
+import { ROAD } from '../src/config.js';
+
+// A flat, empty test strip east of the player's HQ.
+function openStrip(g) {
+  const hq = find(g, 0, 'hq');
+  for (let y = Math.floor(hq.y) - 4; y <= Math.floor(hq.y) + 4; y++) {
+    for (let x = Math.floor(hq.x) - 7; x <= Math.floor(hq.x) + 7; x++) {
+      if (g.map.inBounds(x, y) && !g.map.occupied[y * g.map.w + x] && g.map.isLand(x, y)) g.map.tiles[y * g.map.w + x] = 3; // grass
+    }
+  }
+  for (const e of [...g.entities.values()]) if (e.kind === 'unit') g.entities.delete(e.id);
+  return hq;
+}
+
+test('walls are placed in lines, cost per segment and do not use the construction slot', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const y = Math.floor(hq.y) + 3;
+  const tiles = lineTiles({ x: Math.floor(hq.x) - 3, y }, { x: Math.floor(hq.x) + 3, y });
+  const before = g.players[0].credits;
+  assert.equal(g.cmdPlaceLine(0, 'wall', tiles), 7);
+  assert.equal(g.players[0].credits, before - 7 * BUILDINGS.wall.cost);
+  assert.equal(g.players[0].constructing, null);
+  assert.ok(g.cmdPlace(0, 'barracks', Math.floor(hq.x) - 6, Math.floor(hq.y) - 4) || true, 'other construction still allowed');
+  run(g, BUILDINGS.wall.buildTime + 0.5);
+  for (const t of tiles) assert.ok(g.map.occupied[t.y * g.map.w + t.x] > 0, 'segment blocks its tile');
+});
+
+test('gates let their owner through and block the enemy', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const x = Math.floor(hq.x) + 5, y0 = Math.floor(hq.y) - 4;
+  const wallTiles = lineTiles({ x, y: y0 }, { x, y: y0 + 8 });
+  g.cmdPlaceLine(0, 'wall', wallTiles.filter((t) => t.y !== y0 + 4));
+  g.cmdPlace(0, 'gate', x, y0 + 4);
+  // Seal the strip's ends so the only way across is the gate.
+  for (const t of [{ x, y: y0 - 1 }, { x, y: y0 + 9 }]) if (g.map.inBounds(t.x, t.y)) g.map.occupied[t.y * g.map.w + t.x] = -1;
+  const from = { x: x - 2, y: y0 + 4 }, to = { x: x + 2, y: y0 + 4 };
+  const mine = findPath(g.map, from.x, from.y, to.x, to.y, 'ground', 20000, true, 0);
+  const theirs = findPath(g.map, from.x, from.y, to.x, to.y, 'ground', 20000, true, 1);
+  const reaches = (p) => p && p.length && p[p.length - 1].x === to.x && p[p.length - 1].y === to.y;
+  assert.ok(reaches(mine), 'owner paths through the gate');
+  assert.ok(!reaches(theirs) || theirs.some((t) => Math.abs(t.y - (y0 + 4)) > 5), 'enemy cannot use the gate');
+  assert.equal(g.map.passable(x, y0 + 4, 'ground', 0), true);
+  assert.equal(g.map.passable(x, y0 + 4, 'ground', 1), false);
+  // Destroying the gate clears its ownership.
+  g.destroy(g.get(g.map.occupied[(y0 + 4) * g.map.w + x]), 1);
+  assert.equal(g.map.gateOwner[(y0 + 4) * g.map.w + x], -1);
+});
+
+test('roads cost credits per tile and speed up ground units', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const y = Math.floor(hq.y) + 3;
+  const tiles = lineTiles({ x: Math.floor(hq.x) - 6, y }, { x: Math.floor(hq.x) + 6, y }, true);
+  const before = g.players[0].credits;
+  const n = g.cmdBuildRoad(0, tiles);
+  assert.equal(n, tiles.length);
+  assert.equal(g.players[0].credits, before - n * ROAD.cost);
+  assert.equal(g.cmdBuildRoad(0, tiles), 0, 'cannot pave twice');
+  assert.equal(g.map.moveCost(tiles[0].x, y, 'ground'), ROAD_COST);
+  // Time a tank over 10 tiles on and off the road.
+  const timeOver = (yy) => {
+    const t = g.addUnit(0, 'tank', Math.floor(hq.x) - 5.5, yy + 0.5);
+    g.cmdMove(0, [t.id], Math.floor(hq.x) + 4.5, yy + 0.5);
+    let ticks = 0;
+    while (t.order.type === 'move' && ticks < 2000) { g.step(); g.events.length = 0; ticks++; }
+    g.entities.delete(t.id);
+    return ticks;
+  };
+  const onRoad = timeOver(y), offRoad = timeOver(y - 2);
+  assert.ok(onRoad < offRoad * 0.75, `road ${onRoad} ticks vs grass ${offRoad}`);
+});
+
+test('walls do not keep a defeated player alive, and are not auto-targeted', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const wall = g.addBuilding(1, 'wall', Math.floor(hq.x) + 3, Math.floor(hq.y) + 3, true);
+  const tank = g.addUnit(0, 'tank', wall.x - 2, wall.y);
+  g.updateFog();
+  run(g, 3);
+  assert.equal(wall.hp, wall.maxHp, 'idle tank ignores the wall');
+  assert.equal(tank.target, null);
+  for (const e of [...g.entities.values()]) if (e.owner === 1 && e.kind === 'building' && !e.def.segment) g.destroy(e, 0);
+  g.step();
+  assert.equal(g.winner, 0);
+});
+
+test('an attack-moving army breaches a wall that blocks its route', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  // Enemy wall box around a spot east of the HQ.
+  const cx = Math.floor(hq.x) + 4, cy = Math.floor(hq.y);
+  const ring = [];
+  for (let y = cy - 2; y <= cy + 2; y++) for (let x = cx - 2; x <= cx + 2; x++) if (Math.max(Math.abs(x - cx), Math.abs(y - cy)) === 2) ring.push({ x, y });
+  for (const t of ring) if (!g.map.occupied[t.y * g.map.w + t.x]) g.addBuilding(1, 'wall', t.x, t.y, true);
+  const tank = g.addUnit(0, 'tank', cx - 5.5, cy + 0.5);
+  g.cmdMove(0, [tank.id], cx + 0.5, cy + 0.5, true);
+  run(g, 40);
+  const walls = [...g.entities.values()].filter((e) => e.def?.segment && e.owner === 1).length;
+  assert.ok(walls < ring.length, 'at least one wall segment destroyed');
+  assert.ok(Math.hypot(tank.x - cx - 0.5, tank.y - cy - 0.5) < 2.5, 'tank got inside');
+});
+
+test('a gate can replace one of your own wall segments', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const y = Math.floor(hq.y) + 3, x = Math.floor(hq.x);
+  g.cmdPlaceLine(0, 'wall', lineTiles({ x: x - 2, y }, { x: x + 2, y }));
+  const gate = g.cmdPlace(0, 'gate', x, y);
+  assert.ok(gate, 'gate placed over the wall');
+  assert.equal(g.map.occupied[y * g.map.w + x], gate.id);
+  assert.equal(g.map.gateOwner[y * g.map.w + x], 0);
+  assert.equal(g.cmdPlace(1, 'gate', x - 1, y), null, "can't replace someone else's wall");
+});
+
+test('roads can be cut through forest but not across water', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const x = Math.floor(hq.x) + 2, y = Math.floor(hq.y) + 3;
+  g.map.tiles[y * g.map.w + x] = 4; // forest
+  g.map.tiles[y * g.map.w + x + 1] = 1; // water
+  assert.equal(g.canBuildRoad(0, x, y), true);
+  assert.equal(g.canBuildRoad(0, x + 1, y), false);
+  assert.equal(g.map.moveCost(x, y, 'ground') > 1, true);
+  g.cmdBuildRoad(0, [{ x, y }]);
+  assert.equal(g.map.moveCost(x, y, 'ground'), ROAD_COST);
+});

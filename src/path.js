@@ -42,14 +42,14 @@ const DIRS = [
 ];
 
 // Find the passable tile closest to (tx, ty), searching outward in rings.
-export function nearestPassable(map, tx, ty, domain, maxRadius = 12) {
-  if (map.passable(tx, ty, domain)) return { x: tx, y: ty };
+export function nearestPassable(map, tx, ty, domain, maxRadius = 12, owner = -1) {
+  if (map.passable(tx, ty, domain, owner)) return { x: tx, y: ty };
   for (let r = 1; r <= maxRadius; r++) {
     let best = null, bestD = Infinity;
     for (let y = ty - r; y <= ty + r; y++) {
       for (let x = tx - r; x <= tx + r; x++) {
         if (Math.max(Math.abs(x - tx), Math.abs(y - ty)) !== r) continue;
-        if (!map.passable(x, y, domain)) continue;
+        if (!map.passable(x, y, domain, owner)) continue;
         const d = (x - tx) ** 2 + (y - ty) ** 2;
         if (d < bestD) { bestD = d; best = { x, y }; }
       }
@@ -62,10 +62,10 @@ export function nearestPassable(map, tx, ty, domain, maxRadius = 12) {
 // Returns an array of {x, y} tiles from start (exclusive) to goal (inclusive),
 // or the path to the closest reachable tile when the goal is unreachable.
 // Returns [] when already at the goal, null when nothing is reachable.
-export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth = true) {
+export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth = true, owner = -1) {
   const w = map.w;
   if (domain === 'air') return [{ x: gx, y: gy }];
-  const goal = nearestPassable(map, gx, gy, domain);
+  const goal = nearestPassable(map, gx, gy, domain, 12, owner);
   if (!goal) return null;
   gx = goal.x; gy = goal.y;
   if (sx === gx && sy === gy) return [];
@@ -95,8 +95,8 @@ export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth =
     const g = gScore.get(cur);
     for (const [dx, dy, cost] of DIRS) {
       const nx = cx + dx, ny = cy + dy;
-      if (!map.passable(nx, ny, domain)) continue;
-      if (dx && dy && (!map.passable(cx + dx, cy, domain) || !map.passable(cx, cy + dy, domain))) continue;
+      if (!map.passable(nx, ny, domain, owner)) continue;
+      if (dx && dy && (!map.passable(cx + dx, cy, domain, owner) || !map.passable(cx, cy + dy, domain, owner))) continue;
       const n = ny * w + nx;
       if (closed.has(n)) continue;
       const ng = g + cost * map.moveCost(nx, ny, domain);
@@ -116,18 +116,18 @@ export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth =
     if (n === undefined) return null;
   }
   path.reverse();
-  return smooth ? smoothPath(map, sx, sy, path, domain) : path;
+  return smooth ? smoothPath(map, sx, sy, path, domain, owner) : path;
 }
 
 // Drop intermediate waypoints that have direct line of travel.
-function smoothPath(map, sx, sy, path, domain) {
+function smoothPath(map, sx, sy, path, domain, owner) {
   if (path.length < 3) return path;
   const out = [];
   let ax = sx, ay = sy;
   let i = 0;
   while (i < path.length) {
     let j = path.length - 1;
-    while (j > i && !lineClear(map, ax, ay, path[j].x, path[j].y, domain)) j--;
+    while (j > i && !lineClear(map, ax, ay, path[j].x, path[j].y, domain, owner)) j--;
     out.push(path[j]);
     ax = path[j].x; ay = path[j].y;
     i = j + 1;
@@ -137,14 +137,14 @@ function smoothPath(map, sx, sy, path, domain) {
 
 // Conservative check: samples the segment and requires every touched tile
 // (including a unit-radius band) to be passable.
-export function lineClear(map, x0, y0, x1, y1, domain) {
+export function lineClear(map, x0, y0, x1, y1, domain, owner = -1) {
   const dist = Math.hypot(x1 - x0, y1 - y0);
   const steps = Math.ceil(dist * 3);
   for (let s = 0; s <= steps; s++) {
     const t = steps ? s / steps : 0;
     const px = x0 + 0.5 + (x1 - x0) * t, py = y0 + 0.5 + (y1 - y0) * t;
     for (const [ox, oy] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
-      if (!map.passable(Math.floor(px + ox), Math.floor(py + oy), domain)) return false;
+      if (!map.passable(Math.floor(px + ox), Math.floor(py + oy), domain, owner)) return false;
     }
   }
   return true;

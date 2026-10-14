@@ -1,4 +1,5 @@
-import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, WEAPONS } from './config.js';
+import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS } from './config.js';
+import { lineTiles } from './map.js';
 import { Game } from './sim.js';
 import { AIController } from './ai.js';
 import { Renderer3D, CAMERA } from './gfx/renderer3d.js';
@@ -43,7 +44,7 @@ function startGame() {
     ui.selected.clear();
     ui.placing = null;
     ui.groups = {};
-    sidebar.build._html = sidebar.units._html = null;
+    sidebar.build._html = sidebar.fort._html = sidebar.units._html = null;
     const hq = [...game.entities.values()].find((e) => e.owner === ME && e.type === 'hq');
     cam.zoom = CAMERA.defaultDist;
     centerOn(hq.x + 1, hq.y + 2);
@@ -221,8 +222,9 @@ view.addEventListener('pointermove', (e) => {
   if (ui.drag) { ui.drag.x1 = e.offsetX; ui.drag.y1 = e.offsetY; }
   if (ui.placing) {
     const w = screenToWorld(e.offsetX, e.offsetY);
-    const def = BUILDINGS[ui.placing];
+    const def = BUILDINGS[ui.placing] || { w: 1, h: 1 };
     ui.placeTile = { tx: Math.round(w.x - def.w / 2), ty: Math.round(w.y - def.h / 2) };
+    if (ui.lineStart) ui.lineTiles = lineTiles(ui.lineStart, { x: ui.placeTile.tx, y: ui.placeTile.ty }, ui.placing === 'road');
   }
   const hov = entityAt(e.offsetX, e.offsetY);
   ui.hoverId = hov ? hov.id : null;
@@ -243,17 +245,24 @@ view.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button === 2) {
-    if (ui.placing) { ui.placing = null; return; }
+    if (ui.placing) { ui.placing = null; ui.lineStart = ui.lineTiles = null; return; }
     if (ui.attackMove) { ui.attackMove = false; view.classList.remove('cursor-attack'); return; }
     issueContextOrder(w.x, w.y, entityAt(e.offsetX, e.offsetY));
     return;
   }
   if (ui.placing) {
     const { tx, ty } = ui.placeTile;
+    // Walls and roads are dragged out as lines and placed on release.
+    if (isLineTool(ui.placing)) {
+      ui.lineStart = { x: tx, y: ty };
+      ui.lineTiles = [{ x: tx, y: ty }];
+      return;
+    }
     const b = game.cmdPlace(ME, ui.placing, tx, ty);
     if (b) {
       audio.blip(660);
-      if (!e.shiftKey || game.players[ME].constructing) ui.placing = null;
+      // Fortification tools stay active; other structures need Shift.
+      if (!BUILDINGS[ui.placing].segment && (!e.shiftKey || game.players[ME].constructing)) ui.placing = null;
     } else {
       notify(placeFailReason(ui.placing, tx, ty), true);
     }
@@ -265,6 +274,7 @@ view.addEventListener('pointerdown', (e) => {
 
 view.addEventListener('pointerup', (e) => {
   if (e.button === 1) { mouse.middle = null; return; }
+  if (e.button === 0 && ui.lineStart) { finishLine(); return; }
   if (e.button !== 0 || !ui.drag) return;
   const d = ui.drag;
   ui.drag = null;
@@ -336,7 +346,7 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'escape':
       if (ui.placing || ui.attackMove) {
-        ui.placing = null; ui.attackMove = false; view.classList.remove('cursor-attack');
+        ui.placing = null; ui.attackMove = false; ui.lineStart = ui.lineTiles = null; view.classList.remove('cursor-attack');
       } else {
         ui.selected.clear();
       }
@@ -384,10 +394,39 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.key));
 window.addEventListener('blur', () => keys.clear());
 
+function isLineTool(type) {
+  return type === 'wall' || type === 'road';
+}
+
+// Place the dragged-out wall or road and report what it cost.
+function finishLine() {
+  const tiles = ui.lineTiles || [];
+  const type = ui.placing;
+  ui.lineStart = ui.lineTiles = null;
+  if (!type || !tiles.length) return;
+  const before = game.players[ME].credits;
+  const n = type === 'road' ? game.cmdBuildRoad(ME, tiles) : game.cmdPlaceLine(ME, type, tiles);
+  const spent = Math.round(before - game.players[ME].credits);
+  if (n) {
+    audio.blip(660);
+    const what = type === 'road' ? `${n} road tile${n > 1 ? 's' : ''}` : `${n} wall segment${n > 1 ? 's' : ''}`;
+    notify(`Built ${what} for $${spent}.${n < tiles.length ? ` ${tiles.length - n} skipped (blocked or out of range/funds).` : ''}`, n < tiles.length);
+  } else {
+    const t = tiles[0];
+    notify(type === 'road' ? roadFailReason(t.x, t.y) : placeFailReason(type, t.x, t.y), true);
+  }
+}
+
+function roadFailReason(x, y) {
+  if (game.players[ME].credits < ROAD.cost) return 'Insufficient funds.';
+  if (!game.inBuildRadius(ME, x, y, 1, 1)) return 'Too far from your base.';
+  return 'Roads need dry land that is not built on.';
+}
+
 function placeFailReason(type, tx, ty) {
   const def = BUILDINGS[type];
   const p = game.players[ME];
-  if (p.constructing) return 'Already constructing a structure.';
+  if (p.constructing && !def.segment) return 'Already constructing a structure.';
   if (p.credits < def.cost) return 'Insufficient funds.';
   if (!game.inBuildRadius(ME, tx, ty, def.w, def.h)) return 'Too far from your base.';
   if (def.coastal) return 'Naval Yard must be built on the shoreline.';
@@ -397,7 +436,7 @@ function placeFailReason(type, tx, ty) {
 // ---------------------------------------------------------------- sidebar
 
 const sidebar = {
-  build: $('build-list'), units: $('unit-list'), sel: $('selection'),
+  build: $('build-list'), fort: $('fort-list'), units: $('unit-list'), sel: $('selection'),
   credits: $('credits'), clock: $('clock'), status: $('status'),
 };
 let lastSidebarKey = '';
@@ -425,6 +464,22 @@ function refreshSidebar(force = false) {
     </button>`;
   }
   if (html !== sidebar.build._html) { sidebar.build.innerHTML = html; sidebar.build._html = html; }
+
+  // Fortifications: built in parallel with other construction.
+  html = '';
+  for (const type of FORTIFICATION_MENU) {
+    const def = type === 'road' ? ROAD : BUILDINGS[type];
+    const unlocked = def.requires.every((r) => game.hasBuilding(ME, r));
+    const afford = p.credits >= def.cost;
+    const unit = type === 'gate' ? '' : type === 'road' ? '/tile' : '/seg';
+    const how = type === 'gate' ? 'Click to place in a wall line' : 'Click and drag to draw a line';
+    const extra = { wall: 'Blocks ground units', gate: 'Your units pass, enemies are blocked', road: 'Ground units move ~1.6x faster' }[type];
+    const cls = ['btn', !unlocked && 'locked', unlocked && !afford && 'poor', ui.placing === type && 'active'].filter(Boolean).join(' ');
+    html += `<button class="${cls}" data-fort="${type}" title="${def.name} — $${def.cost}${unit}\n${extra}\n${how}">
+      <img class="icon" src="${renderer.iconFor('building', type)}" alt=""><span class="name">${def.name}</span><span class="cost">$${def.cost}${unit}</span>
+    </button>`;
+  }
+  if (html !== sidebar.fort._html) { sidebar.fort.innerHTML = html; sidebar.fort._html = html; }
 
   // Units, grouped by the structures that produce them.
   const producers = {};
@@ -545,7 +600,15 @@ $('sidebar').addEventListener('pointerdown', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   e.preventDefault();
-  if (btn.dataset.build) {
+  if (btn.dataset.fort) {
+    const type = btn.dataset.fort;
+    const def = type === 'road' ? ROAD : BUILDINGS[type];
+    if (!def.requires.every((r) => game.hasBuilding(ME, r))) return notify('Requires a Command Center.', true);
+    if (game.players[ME].credits < def.cost) return notify('Insufficient funds.', true);
+    ui.placing = ui.placing === type ? null : type;
+    ui.lineStart = ui.lineTiles = null;
+    if (ui.placing) notify(type === 'gate' ? 'Click to place a gate in your wall. Right-click to finish.' : `Click and drag to lay a ${def.name.toLowerCase()}. Right-click to finish.`);
+  } else if (btn.dataset.build) {
     const type = btn.dataset.build;
     const def = BUILDINGS[type];
     if (!game.canBuildType(ME, type)) return notify(`Requires ${def.requires.map((r) => BUILDINGS[r].name).join(', ')}.`, true);

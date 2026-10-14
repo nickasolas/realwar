@@ -8,7 +8,7 @@ import { BUILDINGS, UNITS, WEAPONS, OIL_PER_WELL, Terrain } from '../config.js';
 import { HeightField, WATER_LEVEL } from './heightfield.js';
 import { buildTerrain, buildWater, buildVegetation, buildSky, FogOfWar, fowUniforms, patchFow } from './world.js';
 import { buildUnit, buildStructure, buildWell, buildProp, materials } from './models.js';
-import { buildGroundTextures } from './textures.js';
+import { buildGroundTextures, buildRoadTexture } from './textures.js';
 import { Particles } from './particles.js';
 
 patchFow(materials.body, { clouds: true });
@@ -413,6 +413,7 @@ export class Renderer3D {
 
     this.syncEntities(alpha, dt);
     this.updateWells(dt);
+    this.updateRoads();
     this.updateProjectiles();
     this.particles.update(dt);
     this.updateDecals(dt);
@@ -440,7 +441,8 @@ export class Renderer3D {
         if (visible && !v.seen) {
           v.seen = true;
           // Construction churns up the ground; only paint it once it is seen.
-          this.paintDirt(e.tx, e.ty, e.w, e.h, 0.75, 0.9);
+          if (!e.def.segment) this.paintDirt(e.tx, e.ty, e.w, e.h, 0.75, 0.9);
+          this.vegetation.userData.clear(e.tx, e.ty, e.w, e.h);
         }
         v.root.visible = visible || !!v.seen;
         if (visible) this.updateBuilding(v, e, dt);
@@ -480,10 +482,40 @@ export class Renderer3D {
     return v;
   }
 
+  // Is the tile at (x, y) a wall or gate belonging to `owner`?
+  isFortification(x, y, owner) {
+    const { map } = this.game;
+    if (!map.inBounds(x, y)) return false;
+    const id = map.occupied[y * map.w + x];
+    const o = id > 0 ? this.game.get(id) : null;
+    return !!o && o.owner === owner && o.def.segment;
+  }
+
+  updateFortification(v, e, dt) {
+    const at = (dx, dy) => this.isFortification(e.tx + dx, e.ty + dy, e.owner);
+    if (v.parts.arms) {
+      v.parts.dirs.forEach(([dx, dy], i) => {
+        // Diagonal arms only where the corner isn't already closed off.
+        v.parts.arms[i].visible = at(dx, dy) && (!dx || !dy || (!at(dx, 0) && !at(0, dy)));
+      });
+    }
+    if (v.parts.leaf) {
+      const alongX = at(1, 0) || at(-1, 0) || !(at(0, 1) || at(0, -1));
+      v.body.rotation.y = alongX ? 0 : Math.PI / 2;
+      let open = 0;
+      for (const u of this.game.entities.values()) {
+        if (u.kind === 'unit' && u.owner === e.owner && u.def.domain === 'ground' && Math.hypot(u.x - e.x, u.y - e.y) < 1.5) { open = 1; break; }
+      }
+      v.gateOpen = (v.gateOpen ?? 0) + (open - (v.gateOpen ?? 0)) * Math.min(1, dt * 5);
+      v.parts.leaf.position.y = -0.48 * v.gateOpen;
+    }
+  }
+
   updateBuilding(v, e, dt) {
     const built = e.progress >= 1;
     v.body.scale.y = built ? 1 : Math.max(0.05, e.progress);
     v.scaffold.visible = !built;
+    if (e.def.segment) { this.updateFortification(v, e, dt); return; }
     const P = this.particles;
     if (v.parts.dish) v.parts.dish.rotation.y += dt * 0.8;
     const servicing = this.game.tick - (e.servicingAt ?? -1e9) < 10;
@@ -690,18 +722,100 @@ export class Renderer3D {
     }
   }
 
+  // Rebuild the road surface mesh when the map's roads change.
+  updateRoads() {
+    const { map } = this.game;
+    if (this.roadVersion === map.roadVersion) return;
+    this.roadVersion = map.roadVersion;
+    if (!this.roadMat) {
+      this.roadMat = patchFow(new THREE.MeshStandardMaterial({
+        map: buildRoadTexture(this.game.seed, this.renderer), vertexColors: true, roughness: 0.95,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      }), { clouds: true });
+    }
+    if (this.roadMesh) { this.scene.remove(this.roadMesh); this.roadMesh.geometry.dispose(); }
+    this.clearedRoad ||= new Set();
+    const pos = [], uv = [], col = [], idx = [];
+    const N = 3; // subdivisions per tile so the surface follows the terrain
+    const isRoad = (x, y) => map.inBounds(x, y) && map.road[y * map.w + x];
+    for (let ty = 0; ty < map.h; ty++) {
+      for (let tx = 0; tx < map.w; tx++) {
+        if (!isRoad(tx, ty)) continue;
+        if (!this.clearedRoad.has(ty * map.w + tx)) {
+          this.clearedRoad.add(ty * map.w + tx);
+          this.vegetation.userData.clear(tx, ty);
+        }
+        const base = pos.length / 3;
+        for (let j = 0; j <= N; j++) {
+          for (let i = 0; i <= N; i++) {
+            const x = tx + i / N, z = ty + j / N;
+            pos.push(x, Math.max(0.02, this.hf.heightAt(x, z)) + 0.03, z);
+            uv.push(x * 0.5, z * 0.5);
+            // Dusty verges along edges with no neighbouring road.
+            const edge = (i === 0 && !isRoad(tx - 1, ty)) || (i === N && !isRoad(tx + 1, ty)) || (j === 0 && !isRoad(tx, ty - 1)) || (j === N && !isRoad(tx, ty + 1));
+            const c = edge ? 0.72 : 1;
+            col.push(c * (edge ? 1.12 : 1), c, c * (edge ? 0.9 : 1));
+          }
+        }
+        for (let j = 0; j < N; j++) {
+          for (let i = 0; i < N; i++) {
+            const a = base + j * (N + 1) + i, b = a + 1, c2 = a + N + 1, d = c2 + 1;
+            idx.push(a, c2, b, b, c2, d);
+          }
+        }
+      }
+    }
+    if (!idx.length) { this.roadMesh = null; return; }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    this.roadMesh = new THREE.Mesh(geo, this.roadMat);
+    this.roadMesh.receiveShadow = true;
+    this.roadMesh.renderOrder = 1;
+    this.scene.add(this.roadMesh);
+  }
+
   updatePlacement(ui) {
-    if (!ui.placing) { this.ghost.visible = false; return; }
-    const def = BUILDINGS[ui.placing];
+    this.updateLineGhosts(ui);
+    if (!ui.placing || ui.lineTiles) { this.ghost.visible = false; return; }
+    const def = BUILDINGS[ui.placing] || { w: 1, h: 1 };
     const { tx, ty } = ui.placeTile;
-    const ok = this.game.canPlace(this.viewer, ui.placing, tx, ty);
+    const ok = ui.placing === 'road' ? this.game.canBuildRoad(this.viewer, tx, ty) : this.game.canPlace(this.viewer, ui.placing, tx, ty);
     const color = ok ? '#5f5' : '#f44';
     this.ghost.material.color.set(color);
     this.ghostEdges.material.color.set(color);
-    const hgt = 0.8;
+    const hgt = ui.placing === 'road' ? 0.06 : 0.8;
     this.ghost.scale.set(def.w, hgt, def.h);
     this.ghost.position.set(tx + def.w / 2, this.hf.maxOver(tx, ty, def.w, def.h) + hgt / 2, ty + def.h / 2);
     this.ghost.visible = true;
+  }
+
+  // One translucent tile per segment while dragging out a wall or road.
+  updateLineGhosts(ui) {
+    if (!this.lineGhost) {
+      this.lineGhost = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45, depthWrite: false }), 64);
+      this.lineGhost.frustumCulled = false;
+      this.scene.add(this.lineGhost);
+    }
+    const tiles = ui.placing && ui.lineTiles ? ui.lineTiles : [];
+    const road = ui.placing === 'road';
+    const m4 = new THREE.Matrix4(), c = new THREE.Color();
+    let n = 0;
+    for (const t of tiles.slice(0, 64)) {
+      const ok = road ? this.game.canBuildRoad(this.viewer, t.x, t.y) : this.game.canPlace(this.viewer, ui.placing, t.x, t.y);
+      const h = road ? 0.06 : 0.6;
+      m4.makeScale(0.96, h, 0.96).setPosition(t.x + 0.5, this.hf.groundAt(t.x + 0.5, t.y + 0.5) + h / 2, t.y + 0.5);
+      this.lineGhost.setMatrixAt(n, m4);
+      this.lineGhost.setColorAt(n, c.set(ok ? '#5f5' : '#f44'));
+      n++;
+    }
+    this.lineGhost.count = n;
+    this.lineGhost.visible = n > 0;
+    this.lineGhost.instanceMatrix.needsUpdate = true;
+    if (this.lineGhost.instanceColor) this.lineGhost.instanceColor.needsUpdate = true;
   }
 
   // 2D overlay: health bars, floating text, selection box.
@@ -798,6 +912,10 @@ export class Renderer3D {
     const s = size / map.w;
     mctx.drawImage(this.miniTerrain, 0, 0);
     const p = game.players[this.viewer];
+    mctx.fillStyle = '#4a4a46';
+    for (let i = 0; i < map.road.length; i++) {
+      if (map.road[i] && p.explored[i]) mctx.fillRect((i % map.w) * s, Math.floor(i / map.w) * s, Math.ceil(s), Math.ceil(s));
+    }
     for (const w of map.wells) {
       if (w.amount <= 0 || !p.explored[w.y * map.w + w.x]) continue;
       mctx.fillStyle = '#ffcf3d'; mctx.fillRect(w.x * s - 1.5, w.y * s - 1.5, 3, 3);
@@ -844,9 +962,11 @@ export class Renderer3D {
       this.iconScene.add(sun);
       this.iconCam = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
     }
-    const m = kind === 'unit' ? buildUnit(type, this.viewer) : buildStructure(type, this.viewer, BUILDINGS[type].w, BUILDINGS[type].h);
+    const bdef = BUILDINGS[type] || { w: 1, h: 1 };
+    const m = kind === 'unit' ? buildUnit(type, this.viewer) : buildStructure(type, this.viewer, bdef.w, bdef.h);
     m.root.rotation.y = kind === 'unit' ? -0.6 : 0.25;
     if (m.blur) m.blur.visible = false;
+    if (m.arms) { m.arms[0].visible = true; m.arms[4].visible = true; }
     this.iconScene.add(m.root);
     const box = new THREE.Box3().setFromObject(m.root);
     if (kind === 'building') box.min.y = Math.max(box.min.y, 0);

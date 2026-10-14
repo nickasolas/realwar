@@ -429,10 +429,15 @@ export function buildVegetation(map, hf, seed) {
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), v = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const tint = new THREE.Color();
+  // Which instances stand on each tile, so building over a tile can clear it.
+  const byTile = new Map();
   const place = (geo, list, tintFn, scaleY = 1) => {
     if (!list.length) return null;
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach(([x, z, s, rot], i) => {
+      const key = Math.floor(z) * map.w + Math.floor(x);
+      if (!byTile.has(key)) byTile.set(key, []);
+      byTile.get(key).push([mesh, i]);
       q.setFromAxisAngle(up, rot);
       sc.set(s, s * scaleY, s);
       v.set(x, hf.heightAt(x, z) - 0.03, z);
@@ -462,6 +467,24 @@ export function buildVegetation(map, hf, seed) {
     return vary(c.set(pick(inWoods && autumnField(x * 0.8, z * 0.8) > 0.25 ? FOLIAGE.autumn : FOLIAGE.summer)));
   });
   place(boulder(seed), rocks, (c) => c.setHSL(0.08, 0.08, rng.range(0.7, 1.0)));
+  // Remove trees, shrubs and rocks from a footprint (roads, structures).
+  const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+  group.userData.clear = (tx, ty, w = 1, h = 1) => {
+    const touched = new Set();
+    // Include a half-tile margin so canopies don't overhang the footprint.
+    for (let y = ty - 1; y <= ty + h; y++) {
+      for (let x = tx - 1; x <= tx + w; x++) {
+        for (const [mesh, i] of byTile.get(y * map.w + x) || []) {
+          mesh.getMatrixAt(i, m4);
+          v.setFromMatrixPosition(m4);
+          if (v.x < tx - 0.3 || v.x > tx + w + 0.3 || v.z < ty - 0.3 || v.z > ty + h + 0.3) continue;
+          mesh.setMatrixAt(i, hidden);
+          touched.add(mesh);
+        }
+      }
+    }
+    for (const mesh of touched) mesh.instanceMatrix.needsUpdate = true;
+  };
   return group;
 }
 

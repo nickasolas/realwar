@@ -81,12 +81,23 @@ export const BUILDINGS = {
   factory: { name: 'Vehicle Plant', w: 3, h: 3, hp: 1500, sight: 5, cost: 1500, buildTime: 18, produces: ['scout', 'tank', 'aa', 'artillery', 'truck'], requires: ['barracks'] },
   airfield: { name: 'Airbase', w: 6, h: 2, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber'], requires: ['factory'], repairs: 'air' },
   shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'destroyer'], requires: ['barracks'], coastal: true, repairs: 'naval' },
+  // Fortifications: placed in lines, built in parallel with other construction,
+  // and ignored for victory. Gates let their owner's ground units through.
+  wall: { name: 'Wall', w: 1, h: 1, hp: 700, sight: 2, cost: 40, buildTime: 2, requires: ['hq'], segment: true },
+  gate: { name: 'Gate', w: 1, h: 1, hp: 900, sight: 3, cost: 150, buildTime: 4, requires: ['hq'], segment: true, gate: true },
   depot: { name: 'Service Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 800, buildTime: 12, requires: ['factory'], repairs: 'ground' },
   turret: { name: 'Gun Turret', w: 1, h: 1, hp: 700, sight: 7, cost: 600, buildTime: 8, weapon: 'turret_gun', requires: ['barracks'] },
   samsite: { name: 'SAM Site', w: 1, h: 1, hp: 600, sight: 9, cost: 750, buildTime: 9, weapon: 'sam', requires: ['factory'] },
 };
 
 export const BUILD_ORDER_MENU = ['refinery', 'barracks', 'factory', 'depot', 'shipyard', 'airfield', 'turret', 'samsite'];
+export const FORTIFICATION_MENU = ['wall', 'gate', 'road'];
+
+// Roads are painted onto the map rather than built as structures.
+export const ROAD = { name: 'Road', cost: 15, requires: ['hq'] };
+
+// Longest line a single wall or road drag can place.
+export const MAX_LINE = 40;
 
 // Repair rules. Rates are fractions of max HP per second; costs are the
 // share of an item's price paid for a full 0-to-100% repair.

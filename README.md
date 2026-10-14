@@ -45,7 +45,14 @@ npm start            # http://localhost:8080
   nearest one. Infantry heal for free near a Barracks or Command Center.
   Repairs run at half speed under fire and pause when funds run out.
   Tuning lives in `REPAIR` in `src/config.js`.
-- **Win:** destroy every enemy structure.
+- **Fortifications:** drag to draw concrete **walls** ($40/segment) and
+  asphalt **roads** ($15/tile); click to drop a **gate** ($150) into a wall,
+  replacing a segment. Your ground units drive through your gates; enemies
+  can't. Roads make ground units about 1.6x faster and can be cut through
+  forest. Walls and gates build alongside other construction, don't count
+  for victory, and aren't auto-targeted; an attack-moving army that finds
+  its way walled off breaches the nearest wall.
+- **Win:** destroy every enemy structure (walls and gates don't count).
 
 ### Controls
 

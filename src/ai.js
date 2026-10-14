@@ -257,7 +257,7 @@ export class AIController {
     let best = null, bestD = Infinity;
     const home = g.map.starts[this.id];
     for (const e of g.entities.values()) {
-      if (e.owner === this.id || e.kind !== 'building') continue;
+      if (e.owner === this.id || e.kind !== 'building' || e.def.segment) continue;
       if (coastal && !this.nearWater(e)) continue;
       const d = Math.hypot(e.x - home.x, e.y - home.y);
       if (d < bestD) { bestD = d; best = e; }

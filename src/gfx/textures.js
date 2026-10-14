@@ -171,6 +171,41 @@ function sand(seed) {
   return c;
 }
 
+function asphalt(seed) {
+  const rng = createRng(seed);
+  const c = canvas();
+  const ctx = c.getContext('2d');
+  const macro = [periodicNoise(rng, 4), periodicNoise(rng, 8)];
+  const fine = [periodicNoise(rng, 128), periodicNoise(rng, 256)];
+  paint(ctx, (u, v) => {
+    const m = fbm(macro, u, v), f = fbm(fine, u, v);
+    // Worn grey tarmac with lighter aggregate.
+    const base = mix(78, 104, m) + (f - 0.5) * 34;
+    return [clamp(base + 2), clamp(base + 1), clamp(base - 2)];
+  });
+  for (let i = 0; i < 9000; i++) {
+    const x = rng.next() * SIZE, y = rng.next() * SIZE, t = rng.int(90, 150);
+    ctx.fillStyle = `rgba(${t},${t},${t - 6},0.55)`;
+    wrapped(ctx, x, y, 2, (px, py) => ctx.fillRect(px, py, 1.3, 1.3));
+  }
+  // Patched cracks.
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 40; i++) {
+    let x = rng.next() * SIZE, y = rng.next() * SIZE;
+    ctx.strokeStyle = 'rgba(25,25,24,0.55)';
+    for (let k = 0; k < 8; k++) {
+      const nx = x + (rng.next() - 0.5) * 22, ny = y + (rng.next() - 0.5) * 22;
+      wrapped(ctx, x, y, 24, (px, py) => { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + nx - x, py + ny - y); ctx.stroke(); });
+      x = nx; y = ny;
+    }
+  }
+  return c;
+}
+
+export function buildRoadTexture(seed, renderer) {
+  return toTexture(asphalt(seed + 9), renderer);
+}
+
 function toTexture(c, renderer) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;

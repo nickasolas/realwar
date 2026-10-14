@@ -27,6 +27,9 @@ function fractal(noise, x, y, octaves) {
   return sum / norm;
 }
 
+// Ground units move about 1.6x faster on player-built roads.
+export const ROAD_COST = 0.62;
+
 export class GameMap {
   constructor(w, h) {
     this.w = w;
@@ -42,6 +45,10 @@ export class GameMap {
     // farmhouses and windmills, which block movement like structures do.
     this.roads = [];
     this.props = [];
+    // Player-built roads (speed bonus) and gates (passable for their owner).
+    this.road = new Uint8Array(w * h);
+    this.roadVersion = 0;
+    this.gateOwner = new Int8Array(w * h).fill(-1);
   }
 
   inBounds(x, y) {
@@ -63,10 +70,12 @@ export class GameMap {
   }
 
   // Can an entity of the given domain stand on this tile?
-  passable(x, y, domain) {
+  // `owner` lets a player's own ground units pass through their gates.
+  passable(x, y, domain, owner = -1) {
     if (!this.inBounds(x, y)) return false;
     if (domain === 'air') return true;
-    if (this.occupied[y * this.w + x]) return false;
+    const i = y * this.w + x;
+    if (this.occupied[i] && !(domain === 'ground' && owner >= 0 && this.gateOwner[i] === owner)) return false;
     if (domain === 'naval') return this.isWater(x, y);
     return this.isLand(x, y);
   }
@@ -74,6 +83,7 @@ export class GameMap {
   // Slower movement through forest and sand.
   moveCost(x, y, domain) {
     if (domain !== 'ground') return 1;
+    if (this.road[y * this.w + x]) return ROAD_COST;
     const t = this.get(x, y);
     if (t === Terrain.FOREST) return 1.8;
     if (t === Terrain.SAND) return 1.2;
@@ -276,4 +286,31 @@ function carveRoad(map, a, b) {
     }
   }
   return path;
+}
+
+// Tiles on a straight line from a to b (inclusive). Eight-connected by
+// default; `fourConnected` steps only orthogonally, so road strips join up
+// edge to edge.
+export function lineTiles(a, b, fourConnected = false) {
+  const tiles = [{ x: a.x, y: a.y }];
+  let x = a.x, y = a.y;
+  const dx = Math.abs(b.x - a.x), dy = Math.abs(b.y - a.y);
+  const sx = Math.sign(b.x - a.x), sy = Math.sign(b.y - a.y);
+  if (fourConnected) {
+    let err = 0;
+    for (let i = 0; i < dx + dy; i++) {
+      // Step along whichever axis keeps us closest to the true line.
+      if (err + dy <= 0 || (dx && Math.abs(err + dy) < Math.abs(err - dx))) { x += sx; err += dy; } else { y += sy; err -= dx; }
+      tiles.push({ x, y });
+    }
+    return tiles;
+  }
+  let err = dx - dy;
+  while (x !== b.x || y !== b.y) {
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x += sx; }
+    if (e2 < dx) { err += dx; y += sy; }
+    tiles.push({ x, y });
+  }
+  return tiles;
 }
