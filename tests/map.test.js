@@ -31,3 +31,22 @@ test('both bases are connected by land', () => {
     assert.ok(Math.hypot(end.x - b.x, end.y - b.y - 3) < 2, `seed ${seed}: path reaches enemy base`);
   }
 });
+
+test('civilian props block their tiles but never the road, bases or wells', () => {
+  for (const seed of [1, 2, 3, 42, 1234]) {
+    const m = generateMap(seed);
+    assert.ok(m.props.length > 0, `seed ${seed}: has scenery`);
+    const road = new Set(m.roads.flat().map((p) => p.y * m.w + p.x));
+    for (const p of m.props) {
+      for (let y = p.y; y < p.y + p.h; y++) {
+        for (let x = p.x; x < p.x + p.w; x++) {
+          assert.equal(m.occupied[y * m.w + x], -1, 'prop tile is blocked');
+          assert.ok(!m.passable(x, y, 'ground'));
+          assert.ok(!road.has(y * m.w + x), 'not on the road');
+        }
+      }
+      assert.ok(m.starts.every((s) => Math.hypot(s.x - p.x, s.y - p.y) >= 15), 'clear of bases');
+      assert.ok(m.wells.every((w) => Math.hypot(w.x - p.x, w.y - p.y) >= 4), 'clear of wells');
+    }
+  }
+});

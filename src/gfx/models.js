@@ -13,13 +13,37 @@ export const materials = {
 
 const geoCache = new Map();
 
+// Military paint per faction: desert tan for the Coalition, olive drab for
+// the Liberation Front. Bright team colour is kept to small markings.
+const PAINT = [
+  { body: '#a89d76', dark: '#6e6650' },
+  { body: '#5f6a41', dark: '#3c4430' },
+];
+
 function teamColors(owner) {
   const f = FACTIONS[owner] || FACTIONS[0];
-  const accent = new THREE.Color(f.color);
-  const body = new THREE.Color(f.color).lerp(new THREE.Color('#5d6152'), 0.5);
-  const dark = new THREE.Color(f.dark).lerp(new THREE.Color('#2b2d28'), 0.4);
-  return { accent, body, dark };
+  const paint = PAINT[owner] || PAINT[0];
+  return { accent: new THREE.Color(f.color), body: new THREE.Color(paint.body), dark: new THREE.Color(paint.dark) };
 }
+
+// Camouflage blotches and weathering, computed in model space so the
+// pattern sticks to the vehicle as it moves. Applies to 'body' paint only.
+materials.body.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute float camo;\nvarying float vCamo;\nvarying vec3 vObj;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCamo = camo;\nvObj = position;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying float vCamo;\nvarying vec3 vObj;')
+    .replace('#include <color_fragment>', `#include <color_fragment>
+      if (vCamo > 0.5) {
+        float n1 = sin(vObj.x * 23.0 + sin(vObj.z * 17.0) * 1.7) * sin(vObj.z * 19.0 + sin(vObj.y * 29.0 + vObj.x * 7.0) * 1.3);
+        float n2 = sin(vObj.x * 13.0 - vObj.z * 21.0 + sin(vObj.y * 31.0) * 2.0);
+        diffuseColor.rgb *= n1 > 0.32 ? vec3(0.66, 0.64, 0.58) : (n2 > 0.6 ? vec3(1.12, 1.08, 0.94) : vec3(1.0));
+      }
+      // Dust and grime collect low down.
+      diffuseColor.rgb *= 0.86 + 0.14 * smoothstep(0.0, 0.35, vObj.y);`);
+};
+materials.body.customProgramCacheKey = () => 'camo';
 
 class Parts {
   constructor(team) {
@@ -48,6 +72,7 @@ class Parts {
     const arr = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
     g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    g.setAttribute('camo', new THREE.BufferAttribute(new Float32Array(n).fill(color === 'body' ? 1 : 0), 1));
     if (g.attributes.uv) g.deleteAttribute('uv');
     (glow ? this.glow : this.list).push(g);
     return this;
@@ -145,7 +170,8 @@ export function buildUnit(type, owner) {
     case 'truck':
       root = cached(key, team, (p) => {
         p.box(0.78, 0.07, 0.32, '#2e2e2a', { y: 0.12 });
-        p.box(0.24, 0.24, 0.34, 'team', { x: 0.27, y: 0.26 });
+        p.box(0.24, 0.24, 0.34, 'body', { x: 0.27, y: 0.26 });
+        p.box(0.1, 0.006, 0.1, 'team', { x: 0.27, y: 0.383 });
         p.box(0.02, 0.1, 0.28, '#9fc6de', { x: 0.39, y: 0.32 });
         p.cyl(0.15, 0.15, 0.48, '#b9bcb5', { x: -0.12, y: 0.3, rz: Math.PI / 2 }, 14);
         p.cyl(0.152, 0.152, 0.04, 'team', { x: -0.12, y: 0.3, rz: Math.PI / 2 }, 14);
@@ -158,7 +184,7 @@ export function buildUnit(type, owner) {
     case 'scout':
       root = cached(key, team, (p) => {
         p.box(0.6, 0.12, 0.34, 'body', { y: 0.18 });
-        p.box(0.2, 0.08, 0.3, 'team', { x: 0.2, y: 0.27, rz: -0.2 });
+        p.box(0.2, 0.08, 0.3, 'body', { x: 0.2, y: 0.27, rz: -0.2 });
         for (const z of [-0.13, 0.13]) {
           p.cyl(0.015, 0.015, 0.3, '#222', { x: -0.03, y: 0.36, z, rz: Math.PI / 2 });
           p.cyl(0.015, 0.015, 0.2, '#222', { x: 0.1, y: 0.3, z, rz: 0.9 });
@@ -181,14 +207,14 @@ export function buildUnit(type, owner) {
         p.box(len * 0.82, 0.16, 0.42, 'body', { y: 0.24 });
         p.add(extrudeOutline([[0, 0], [0.16, 0], [0, 0.14]], 0.42), 'body', { x: len * 0.41, y: 0.17 });
         p.box(0.16, 0.05, 0.3, '#3a3d33', { x: -len * 0.3, y: 0.34 });
-        p.box(len * 0.5, 0.02, 0.43, 'team', { y: 0.32 });
+        p.box(0.06, 0.02, 0.43, 'team', { x: -len * 0.12, y: 0.32 });
         p.light(0.02, '#fff7cf', { x: len * 0.5, y: 0.26, z: 0.16 });
         p.light(0.02, '#fff7cf', { x: len * 0.5, y: 0.26, z: -0.16 });
       });
       parts.turret = cached(key + ':t', team, (p) => {
         if (type === 'tank') {
           p.add(extrudeOutline([[-0.22, -0.16], [0.14, -0.16], [0.22, -0.08], [0.22, 0.08], [0.14, 0.16], [-0.22, 0.16]], 0.14).rotateX(Math.PI / 2), 'body', { y: 0.07 });
-          p.box(0.16, 0.02, 0.33, 'team', { x: -0.05, y: 0.145 });
+          p.box(0.08, 0.02, 0.08, 'team', { x: -0.12, y: 0.145 });
           p.cyl(0.03, 0.035, 0.55, '#2d2f29', { x: 0.45, y: 0.06, rz: Math.PI / 2 }, 10);
           p.cyl(0.045, 0.045, 0.08, '#2d2f29', { x: 0.7, y: 0.06, rz: Math.PI / 2 }, 10);
           p.cyl(0.05, 0.05, 0.04, '#3a3d33', { x: -0.06, y: 0.16, z: 0.07 }, 10);
@@ -198,10 +224,10 @@ export function buildUnit(type, owner) {
           for (const z of [-0.1, 0.1]) p.cyl(0.02, 0.02, 0.4, '#222', { x: 0.3, y: 0.18, z, rz: Math.PI / 2 - 0.5 }, 8);
           p.cyl(0.11, 0.11, 0.015, '#ccc', { x: -0.14, y: 0.3, rx: 1.1 }, 14);
           p.cyl(0.012, 0.012, 0.12, '#444', { x: -0.14, y: 0.22 });
-          p.box(0.12, 0.02, 0.31, 'team', { y: 0.165 });
+          p.box(0.07, 0.02, 0.07, 'team', { x: -0.08, y: 0.165 });
         } else {
           p.box(0.42, 0.22, 0.36, 'body', { x: -0.06, y: 0.11 });
-          p.box(0.2, 0.02, 0.37, 'team', { x: -0.1, y: 0.225 });
+          p.box(0.08, 0.02, 0.08, 'team', { x: -0.18, y: 0.225 });
           p.cyl(0.04, 0.05, 0.85, '#2d2f29', { x: 0.45, y: 0.22, rz: Math.PI / 2 - 0.35 }, 10);
           p.cyl(0.06, 0.06, 0.1, '#2d2f29', { x: 0.82, y: 0.36, rz: Math.PI / 2 - 0.35 }, 10);
         }
@@ -224,7 +250,7 @@ export function buildUnit(type, owner) {
         }
         p.box(0.06, 0.08, 0.4, '#333', { x: 0.02, y: -0.18 });
         p.cyl(0.04, 0.05, 0.1, '#333', { x: 0.03, y: 0.2 });
-        p.box(0.2, 0.02, 0.24, 'team', { x: 0.0, y: 0.15 });
+        p.box(0.06, 0.02, 0.06, 'team', { x: 0.0, y: 0.15 });
         p.light(0.02, '#ff3030', { x: -0.86, y: 0.2 });
       });
       parts.rotor = cached(key + ':r', team, (p) => {
@@ -272,7 +298,7 @@ export function buildUnit(type, owner) {
         p.add(hullFromOutline([[0.15, 0], [-0.3, 0.55], [-0.42, 0.55], [-0.35, 0]], 0.025), 'body', {});
         p.add(hullFromOutline([[0.15, 0], [-0.3, -0.55], [-0.42, -0.55], [-0.35, 0]], 0.025), 'body', {});
         for (const z of [-0.1, 0.1]) p.add(extrudeOutline([[0, 0], [0.2, 0], [0.05, 0.25], [-0.04, 0.25]], 0.02), 'team', { x: -0.48, y: 0.04, z, rx: z * 2 });
-        p.box(0.3, 0.02, 0.6, 'team', { x: -0.28, y: 0.015 });
+        for (const z of [-0.4, 0.4]) p.box(0.08, 0.03, 0.08, 'team', { x: -0.3, y: 0.015, z });
         p.glowBox(0.03, 0.08, 0.08, '#ffb060', { x: -0.51, y: 0 });
       });
       break;
@@ -281,7 +307,7 @@ export function buildUnit(type, owner) {
         p.add(hullFromOutline([[0.75, 0], [0.1, 0.95], [-0.15, 0.95], [-0.35, 0.45], [-0.5, 0.45], [-0.5, -0.45], [-0.35, -0.45], [-0.15, -0.95], [0.1, -0.95]], 0.07), 'body', {});
         p.sphere(0.14, 'body', { x: 0.25, y: 0.03, sx: 3, sy: 0.6 }, 12, 8);
         p.sphere(0.06, '#1f3a4d', { x: 0.55, y: 0.08, sx: 1.8, sy: 0.7 }, 8, 6);
-        p.box(0.5, 0.02, 1.4, 'team', { x: 0, y: 0.075 });
+        for (const z of [-0.7, 0.7]) p.box(0.12, 0.08, 0.12, 'team', { x: -0.05, y: 0.04, z });
         for (const z of [-0.2, 0.2]) p.glowBox(0.03, 0.06, 0.1, '#ffb060', { x: -0.51, y: 0.03, z });
       });
       break;
@@ -291,7 +317,7 @@ export function buildUnit(type, owner) {
         p.add(hullFromOutline([[0.58, 0], [0.31, 0.19], [-0.49, 0.19], [-0.49, -0.19], [0.31, -0.19]], 0.02), '#5b6166', { y: 0.11 });
         p.box(0.34, 0.16, 0.26, 'body', { x: -0.08, y: 0.2 });
         p.box(0.03, 0.06, 0.24, '#20323d', { x: 0.1, y: 0.25 });
-        p.box(0.34, 0.02, 0.27, 'team', { x: -0.08, y: 0.29 });
+        p.box(0.08, 0.02, 0.27, 'team', { x: -0.2, y: 0.29 });
         p.cyl(0.01, 0.01, 0.3, '#333', { x: -0.15, y: 0.42 }, 4);
       });
       parts.turret = cached(key + ':t', team, (p) => {
@@ -308,7 +334,7 @@ export function buildUnit(type, owner) {
         p.box(0.5, 0.2, 0.36, 'body', { x: -0.05, y: 0.26 });
         p.box(0.25, 0.16, 0.28, 'body', { x: 0.05, y: 0.44 });
         p.box(0.03, 0.05, 0.27, '#20323d', { x: 0.18, y: 0.48 });
-        p.box(0.5, 0.02, 0.37, 'team', { x: -0.05, y: 0.365 });
+        p.box(0.08, 0.02, 0.37, 'team', { x: -0.25, y: 0.365 });
         p.cyl(0.015, 0.02, 0.45, '#444', { x: -0.05, y: 0.75 }, 6);
         p.box(0.02, 0.02, 0.24, '#444', { x: -0.05, y: 0.85 });
         p.cyl(0.07, 0.08, 0.18, '#4d5257', { x: -0.4, y: 0.33 }, 10);
@@ -359,7 +385,8 @@ export function buildStructure(type, owner, w, h) {
       root = cached(key, team, (p) => {
         slab(p, W, D);
         p.box(2.0, 0.6, 1.7, '#a9a596', { x: -0.2, y: 0.42, z: 0.2 });
-        p.box(2.04, 0.05, 1.74, 'team', { x: -0.2, y: 0.72, z: 0.2 });
+        p.box(2.04, 0.05, 1.74, '#6d6a60', { x: -0.2, y: 0.72, z: 0.2 });
+        p.box(2.06, 0.03, 0.04, 'team', { x: -0.2, y: 0.74, z: 1.07 });
         p.box(1.2, 0.5, 1.1, '#bab6a6', { x: -0.4, y: 0.97, z: 0.25 });
         p.box(1.24, 0.04, 1.14, '#6e6b62', { x: -0.4, y: 1.24, z: 0.25 });
         windowsRow(p, -1.1, 0.7, 0.5, 1.06, 7);
@@ -394,7 +421,7 @@ export function buildStructure(type, owner, w, h) {
           p.cyl(r + 0.005, r + 0.005, 0.06, 'team', { x, y: 0.12 + hh * 0.7, z }, 20);
         }
         p.box(0.5, 0.35, 0.4, '#a9a596', { x: 0.45, y: 0.3, z: 0.45 });
-        p.box(0.52, 0.03, 0.42, 'team', { x: 0.45, y: 0.49, z: 0.45 });
+        p.box(0.52, 0.03, 0.42, '#6d6a60', { x: 0.45, y: 0.49, z: 0.45 });
         p.cyl(0.04, 0.04, 1.1, '#6f6c64', { x: 0, y: 0.35, rz: Math.PI / 2 }, 6);
         p.cyl(0.04, 0.04, 1.1, '#6f6c64', { z: 0, y: 0.25, rx: Math.PI / 2 }, 6);
         windowsRow(p, 0.27, 0.63, 0.32, 0.655, 3);
@@ -423,7 +450,10 @@ export function buildStructure(type, owner, w, h) {
           p.add(extrudeOutline([[0, 0], [0.48, 0], [0.48, 0.28]], 1.7), i % 2 ? '#7f7d75' : '#8c8a81', { x: -1.2 + i * 0.48, y: 0.82, z: -0.3 });
           p.glowBox(0.01, 0.2, 1.6, '#cfe6ff', { x: -0.73 + i * 0.48, y: 0.94, z: -0.3 });
         }
-        p.box(2.42, 0.06, 1.72, 'team', { y: 0.55, z: -0.3 });
+        p.box(2.42, 0.06, 1.72, '#77746a', { y: 0.55, z: -0.3 });
+        p.box(2.44, 0.03, 0.04, 'team', { y: 0.56, z: 0.56 });
+        p.cyl(0.015, 0.015, 0.8, '#ddd', { x: -1.3, y: 0.5, z: 0.75 }, 6);
+        p.box(0.26, 0.16, 0.01, 'team', { x: -1.17, y: 0.82, z: 0.75 });
         // Garage doors.
         for (const x of [-0.6, 0.4]) {
           p.box(0.7, 0.5, 0.02, '#3c3e38', { x, y: 0.38, z: 0.56 });
@@ -505,7 +535,8 @@ export function buildStructure(type, owner, w, h) {
         p.box(2.1, 0.12, 0.08, '#77756c', { x: 0.2, y: 0.17, z: 0.92 });
         // Warehouse.
         p.box(1.0, 0.5, 0.7, '#a2a094', { x: -0.9, y: 0.37, z: -0.85 });
-        p.box(1.02, 0.04, 0.72, 'team', { x: -0.9, y: 0.6, z: -0.85 });
+        p.box(1.02, 0.04, 0.72, '#6d6a60', { x: -0.9, y: 0.6, z: -0.85 });
+        p.box(1.04, 0.03, 0.03, 'team', { x: -0.9, y: 0.61, z: -0.49 });
         windowsRow(p, -1.3, -0.5, 0.4, -0.495, 4);
         // Gantry crane.
         for (const z of [-0.2, 1.0]) p.box(0.08, 1.2, 0.08, '#d1a43a', { x: 0.9, y: 0.72, z });
@@ -548,7 +579,8 @@ export function buildStructure(type, owner, w, h) {
       root = cached(key, team, (p) => {
         slab(p, W, D);
         p.cyl(0.4, 0.46, 0.25, '#8c897e', { y: 0.24 }, 10);
-        p.cyl(0.41, 0.41, 0.04, 'team', { y: 0.36 }, 10);
+        p.cyl(0.41, 0.41, 0.04, '#77746a', { y: 0.36 }, 10);
+        p.cyl(0.415, 0.415, 0.02, 'team', { y: 0.33 }, 10);
         for (let i = 0; i < 8; i++) p.box(0.14, 0.1, 0.1, '#8a7d5c', { x: Math.cos((i / 8) * 6.28) * 0.47, y: 0.16, z: Math.sin((i / 8) * 6.28) * 0.47, ry: -(i / 8) * 6.28 });
       });
       parts.turret = cached(key + ':t', team, (p) => {
@@ -563,7 +595,8 @@ export function buildStructure(type, owner, w, h) {
       root = cached(key, team, (p) => {
         slab(p, W, D);
         p.cyl(0.38, 0.44, 0.18, '#8c897e', { y: 0.2 }, 10);
-        p.cyl(0.39, 0.39, 0.04, 'team', { y: 0.29 }, 10);
+        p.cyl(0.39, 0.39, 0.04, '#77746a', { y: 0.29 }, 10);
+        p.cyl(0.395, 0.395, 0.02, 'team', { y: 0.26 }, 10);
       });
       parts.turret = cached(key + ':t', team, (p) => {
         p.cyl(0.12, 0.14, 0.12, '#55574f', { y: 0.06 });
@@ -580,6 +613,81 @@ export function buildStructure(type, owner, w, h) {
   const wrap = new THREE.Group();
   wrap.add(root);
   return { root: wrap, body: root, ...parts };
+}
+
+// Gabled roof: a triangular prism spanning `len` along X.
+function gable(width, height, len) {
+  return extrudeOutline([[-width / 2, 0], [width / 2, 0], [0, height]], len).rotateY(Math.PI / 2);
+}
+
+// Civilian scenery. Neutral colours; footprint centred on the origin.
+export function buildProp(kind) {
+  const team = teamColors(0);
+  const parts = {};
+  let root;
+  switch (kind) {
+    case 'house':
+      root = cached('prop:house', team, (p) => {
+        p.box(0.95, 0.03, 0.95, '#7d6a4c', { y: 0.015 });
+        p.box(0.62, 0.34, 0.44, '#d8ccb0', { y: 0.2 });
+        p.add(gable(0.54, 0.26, 0.7), '#4b4038', { y: 0.37 });
+        p.box(0.08, 0.2, 0.08, '#8a4b35', { x: 0.18, y: 0.6, z: -0.08 });
+        p.box(0.09, 0.17, 0.01, '#4a3526', { x: -0.12, y: 0.12, z: 0.225 });
+        for (const x of [0.08, 0.22]) p.box(0.08, 0.08, 0.01, '#33414a', { x, y: 0.24, z: 0.225 });
+        for (const x of [-0.18, 0.12]) p.box(0.08, 0.08, 0.01, '#33414a', { x, y: 0.24, z: -0.225 });
+        // Picket fence along the front.
+        for (let i = 0; i < 9; i++) p.box(0.02, 0.09, 0.02, '#e6e0d0', { x: -0.42 + i * 0.105, y: 0.06, z: 0.44 });
+        p.box(0.86, 0.015, 0.015, '#e6e0d0', { y: 0.08, z: 0.44 });
+      });
+      break;
+    case 'barn':
+      root = cached('prop:barn', team, (p) => {
+        p.box(1.9, 0.03, 0.95, '#7d6a4c', { y: 0.015 });
+        p.box(1.5, 0.42, 0.66, '#7c3a28', { y: 0.24 });
+        p.add(gable(0.76, 0.3, 1.56), '#5a5650', { y: 0.45 });
+        p.box(0.34, 0.32, 0.01, '#5e2a1d', { x: -0.3, y: 0.2, z: 0.335 });
+        p.box(0.34, 0.015, 0.012, '#eee', { x: -0.3, y: 0.36, z: 0.338 });
+        p.box(0.015, 0.32, 0.012, '#eee', { x: -0.3, y: 0.2, z: 0.338 });
+        // Hay bales and a water trough.
+        for (const [x, z] of [[0.5, 0.42], [0.66, 0.4], [0.58, 0.48]]) p.cyl(0.07, 0.07, 0.1, '#c9a856', { x, y: 0.07, z, rx: Math.PI / 2 }, 10);
+        p.box(0.22, 0.06, 0.08, '#6a5a45', { x: 0.82, y: 0.06, z: -0.2 });
+      });
+      break;
+    case 'silo':
+      root = cached('prop:silo', team, (p) => {
+        p.box(0.9, 0.03, 0.9, '#7d6a4c', { y: 0.015 });
+        p.cyl(0.2, 0.2, 0.9, '#b8b3a7', { x: -0.1, y: 0.47, z: -0.1 }, 16);
+        p.sphere(0.2, '#9d988c', { x: -0.1, y: 0.92, z: -0.1, sy: 0.6 }, 16, 8);
+        for (let i = 0; i < 4; i++) p.cyl(0.203, 0.203, 0.015, '#8a867c', { x: -0.1, y: 0.2 + i * 0.2, z: -0.1 }, 16);
+        p.box(0.3, 0.22, 0.28, '#8f8a7c', { x: 0.24, y: 0.13, z: 0.2 });
+        p.add(gable(0.32, 0.1, 0.34), '#5a5650', { x: 0.24, y: 0.24, z: 0.2 });
+      });
+      break;
+    case 'windmill':
+    default:
+      root = cached('prop:windmill', team, (p) => {
+        p.box(0.95, 0.03, 0.95, '#7d6a4c', { y: 0.015 });
+        p.cyl(0.18, 0.3, 1.0, '#8d8070', { y: 0.52 }, 8);
+        p.cyl(0.19, 0.19, 0.04, '#5b4a3a', { y: 0.42 }, 8);
+        p.cone(0.24, 0.26, '#4b4038', { y: 1.15 }, 8);
+        p.box(0.09, 0.16, 0.01, '#4a3526', { y: 0.1, z: 0.29 });
+        p.box(0.07, 0.07, 0.01, '#33414a', { y: 0.62, z: 0.23 });
+      });
+      // Four lattice sails on a hub facing +Z.
+      parts.sails = cached('prop:windmill:sails', team, (p) => {
+        p.cyl(0.04, 0.04, 0.12, '#3d3226', { rx: Math.PI / 2 }, 8);
+        for (let k = 0; k < 4; k++) {
+          const a = (k * Math.PI) / 2;
+          const cx = Math.cos(a), cy = Math.sin(a);
+          p.box(0.025, 0.62, 0.02, '#5a4632', { x: cx * 0.31, y: cy * 0.31, rz: a - Math.PI / 2 });
+          p.box(0.12, 0.48, 0.008, '#d8cfb8', { x: cx * 0.36 - cy * 0.07, y: cy * 0.36 + cx * 0.07, rz: a - Math.PI / 2 });
+        }
+      });
+      parts.sails.position.set(0, 1.0, 0.27);
+      root.add(parts.sails);
+  }
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return { root, ...parts };
 }
 
 // Oil well pumpjack (neutral) with an animated beam.

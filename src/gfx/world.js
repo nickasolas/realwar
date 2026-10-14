@@ -17,7 +17,10 @@ export const fowUniforms = {
 // Darken unexplored/remembered areas in any lit material. Works with
 // instancing. `extraFragment` lets callers append more shader code.
 export function patchFow(material, { clouds = true } = {}) {
-  material.onBeforeCompile = (shader) => {
+  const prevCompile = material.onBeforeCompile;
+  const prevKey = material.customProgramCacheKey.bind(material);
+  material.onBeforeCompile = (shader, renderer) => {
+    prevCompile.call(material, shader, renderer);
     Object.assign(shader.uniforms, fowUniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vFowXZ;')
@@ -52,7 +55,7 @@ export function patchFow(material, { clouds = true } = {}) {
         }
         #include <fog_fragment>`);
   };
-  material.customProgramCacheKey = () => 'fow' + (clouds ? 'c' : '');
+  material.customProgramCacheKey = () => prevKey() + '|fow' + (clouds ? 'c' : '');
   return material;
 }
 
@@ -82,43 +85,6 @@ export class FogOfWar {
 }
 
 // ------------------------------------------------------- procedural textures
-
-function tileableNoiseCanvas(size, seed, octaves = 5) {
-  const rng = createRng(seed);
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d');
-  const img = ctx.createImageData(size, size);
-  const layers = [];
-  for (let o = 0; o < octaves; o++) {
-    const n = 4 << o;
-    const g = new Float32Array(n * n);
-    for (let i = 0; i < g.length; i++) g[i] = rng.next();
-    layers.push({ n, g });
-  }
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let v = 0, amp = 0.5, norm = 0;
-      for (const { n, g } of layers) {
-        const fx = (x / size) * n, fy = (y / size) * n;
-        const x0 = Math.floor(fx), y0 = Math.floor(fy);
-        const tx = fx - x0, ty = fy - y0;
-        const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
-        const at = (a, b) => g[(b % n) * n + (a % n)];
-        const a = at(x0, y0), b = at(x0 + 1, y0), cc = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
-        v += (a + (b - a) * sx + (cc - a) * sy + (a - b - cc + d) * sx * sy) * amp;
-        norm += amp; amp *= 0.55;
-      }
-      v /= norm;
-      const i = (y * size + x) * 4;
-      const g8 = Math.round(170 + (v - 0.5) * 150);
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = g8;
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
-}
 
 function waterNormalCanvas(size) {
   // Sum of integer-frequency waves so the texture tiles seamlessly.
@@ -150,26 +116,20 @@ function waterNormalCanvas(size) {
 
 // --------------------------------------------------------------- terrain
 
-const C = (hex) => new THREE.Color(hex);
-const PALETTE = {
-  deep: C('#1d3b4f'), shallow: C('#3f8a8a'), sand: C('#d8c48e'), wetSand: C('#a99561'),
-  grass: C('#6f9a43'), grassDry: C('#9da653'), grassLush: C('#4f8236'), forest: C('#3f6a2c'),
-  rock: C('#8b8375'), rockDark: C('#5f584e'), cliff: C('#7a6f60'), peak: C('#c9c4b8'),
-};
+// Splat channels: x = grass, y = dirt, z = rock, w = sand.
+const SPLAT = { grass: 0, dirt: 1, rock: 2, sand: 3 };
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
-export function buildTerrain(map, hf, seed) {
+export function buildTerrain(map, hf, seed, textures) {
   const { vw, vh, heights } = hf;
   const geo = new THREE.BufferGeometry();
   const pos = new Float32Array(vw * vh * 3);
-  const uv = new Float32Array(vw * vh * 2);
   for (let j = 0; j < vh; j++) {
     for (let i = 0; i < vw; i++) {
       const k = j * vw + i;
       pos[k * 3] = i / RES;
       pos[k * 3 + 1] = heights[k];
       pos[k * 3 + 2] = j / RES;
-      uv[k * 2] = i / RES / 2.5;
-      uv[k * 2 + 1] = j / RES / 2.5;
     }
   }
   const idx = new Uint32Array((vw - 1) * (vh - 1) * 6);
@@ -182,16 +142,33 @@ export function buildTerrain(map, hf, seed) {
     }
   }
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   geo.computeVertexNormals();
 
-  // Vertex colours from terrain type, height, slope and patchy noise.
+  // Distance from each vertex to the nearest road centre line, in tiles.
+  const roadDist = new Float32Array(vw * vh).fill(99);
+  for (const road of map.roads) {
+    for (const rp of road) {
+      const cx = rp.x + 1, cy = rp.y + 1; // carved 2x2, centred on the tile corner
+      for (let j = Math.max(0, (cy - 2) * RES); j <= Math.min(vh - 1, (cy + 2) * RES); j++) {
+        for (let i = Math.max(0, (cx - 2) * RES); i <= Math.min(vw - 1, (cx + 2) * RES); i++) {
+          const d = Math.hypot(i / RES - cx, j / RES - cy);
+          const k = j * vw + i;
+          if (d < roadDist[k]) roadDist[k] = d;
+        }
+      }
+    }
+  }
+
+  // Splat weights and a macro tint per vertex.
   const nrm = geo.attributes.normal.array;
+  const splat = new Float32Array(vw * vh * 4);
   const col = new Float32Array(vw * vh * 3);
   const rng = createRng(seed + 99);
   const patch = makePatchNoise(seed);
-  const tmp = new THREE.Color();
+  const patch2 = makePatchNoise(seed + 31);
+  const tint = new THREE.Color();
+  const deep = new THREE.Color('#1c3b52'), shallow = new THREE.Color('#5f8f86');
   for (let j = 0; j < vh; j++) {
     for (let i = 0; i < vw; i++) {
       const k = j * vw + i;
@@ -199,41 +176,97 @@ export function buildTerrain(map, hf, seed) {
       const slope = 1 - nrm[k * 3 + 1];
       const tx = Math.min(map.w - 1, Math.floor(i / RES)), ty = Math.min(map.h - 1, Math.floor(j / RES));
       const t = map.get(tx, ty);
-      const n = patch(i / RES, j / RES);
-      if (h < -0.05) {
-        tmp.copy(PALETTE.wetSand).lerp(PALETTE.shallow, Math.min(1, -h * 1.2)).lerp(PALETTE.deep, Math.min(1, Math.max(0, -h - 0.6)));
-      } else if (h < 0.22 || t === Terrain.SAND) {
-        tmp.copy(PALETTE.wetSand).lerp(PALETTE.sand, Math.min(1, h / 0.15));
-      } else {
-        tmp.copy(PALETTE.grass).lerp(PALETTE.grassDry, Math.max(0, n) * 0.9).lerp(PALETTE.grassLush, Math.max(0, -n) * 0.9);
-        if (t === Terrain.FOREST) tmp.lerp(PALETTE.forest, 0.7);
-        if (h < 0.3) tmp.lerp(PALETTE.sand, (0.3 - h) / 0.08);
-      }
-      // Steep ground and mountains show bare rock; high peaks are pale.
-      const rockAmt = Math.min(1, Math.max(0, (slope - 0.18) * 3.5) + (t === Terrain.ROCK ? 0.6 : 0));
-      if (rockAmt > 0 && h > 0) {
-        const rc = PALETTE.rock.clone().lerp(PALETTE.rockDark, rng.next() * 0.5 + Math.max(0, n) * 0.3);
-        if (h > 3.4) rc.lerp(PALETTE.peak, Math.min(1, (h - 3.4) * 0.8));
-        tmp.lerp(rc, rockAmt);
-      }
-      const jitter = 1 + (rng.next() - 0.5) * 0.06;
-      col[k * 3] = tmp.r * jitter; col[k * 3 + 1] = tmp.g * jitter; col[k * 3 + 2] = tmp.b * jitter;
+      const n = patch(i / RES, j / RES), n2 = patch2(i / RES * 2.3, j / RES * 2.3);
+      let g = 1, dt = 0, rk = 0, sd = 0;
+      // Beaches and anything near or under the waterline.
+      const beach = Math.max(t === Terrain.SAND ? 0.85 : 0, 1 - smooth(0.12, 0.34, h));
+      sd = beach; g = 1 - beach;
+      // Worn, patchy ground: bare earth shows through the meadow here and there.
+      const bare = smooth(0.35, 0.75, n2) * 0.55 + (t === Terrain.FOREST ? 0.3 : 0);
+      dt = g * bare; g -= dt;
+      // Dirt road with a ragged edge.
+      const road = 1 - smooth(0.55, 1.05, roadDist[k] + (n2 - 0.5) * 0.35);
+      if (road > 0) { const r = road * (1 - sd * 0.5); g *= 1 - r; dt = dt * (1 - r) + r; }
+      // Rock on cliffs and mountains.
+      rk = Math.min(1, smooth(0.16, 0.42, slope) + (t === Terrain.ROCK ? 0.75 : 0));
+      if (h < 0.05) rk *= 0.3;
+      g *= 1 - rk; dt *= 1 - rk; sd *= 1 - rk;
+      splat[k * 4] = g; splat[k * 4 + 1] = dt; splat[k * 4 + 2] = rk; splat[k * 4 + 3] = sd;
+
+      // Macro tint: meadow hue drift, shaded forest floor, wet sand, water depth.
+      tint.setRGB(1, 1, 1);
+      tint.multiplyScalar(0.9 + n * 0.14 + n2 * 0.06 + (rng.next() - 0.5) * 0.04);
+      if (t === Terrain.FOREST) tint.multiplyScalar(0.72);
+      if (h < 0.18) tint.multiplyScalar(0.78 + smooth(-0.1, 0.18, h) * 0.22);
+      if (h < -0.05) tint.lerp(shallow, Math.min(1, -h * 0.9)).lerp(deep, smooth(0.4, 1.6, -h));
+      if (h > 3.4) tint.lerp(new THREE.Color('#f2efe8'), Math.min(0.6, (h - 3.4) * 0.5));
+      col[k * 3] = tint.r; col[k * 3 + 1] = tint.g; col[k * 3 + 2] = tint.b;
     }
   }
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const splatAttr = new THREE.BufferAttribute(splat, 4);
+  splatAttr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('splat', splatAttr);
 
-  const detail = new THREE.CanvasTexture(tileableNoiseCanvas(256, seed + 5));
-  detail.wrapS = detail.wrapT = THREE.RepeatWrapping;
-  detail.colorSpace = THREE.SRGBColorSpace;
-  detail.anisotropy = 8;
-  const bump = new THREE.CanvasTexture(tileableNoiseCanvas(256, seed + 11, 6));
-  bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
-  const mat = patchFow(new THREE.MeshStandardMaterial({
-    vertexColors: true, map: detail, bumpMap: bump, bumpScale: 1.2, roughness: 0.95, metalness: 0,
-  }));
+  const mat = patchFow(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0 }));
+  const fowCompile = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, r) => {
+    fowCompile(shader, r);
+    shader.uniforms.tGrass = { value: textures.grass };
+    shader.uniforms.tDirt = { value: textures.dirt };
+    shader.uniforms.tRock = { value: textures.rock };
+    shader.uniforms.tSand = { value: textures.sand };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 splat;\nvarying vec4 vSplat;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSplat = splat;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D tGrass, tDirt, tRock, tSand;
+        varying vec4 vSplat;
+        // Two scales per texture hide the tiling grid.
+        vec3 groundTex(sampler2D t, vec2 p) {
+          vec3 c = mix(texture2D(t, p * 0.5).rgb, texture2D(t, p * 0.11 + 0.31).rgb, 0.4);
+          // Broad light/dark mottling every few tiles, like sun-bleached and lush ground.
+          float lum = dot(texture2D(t, p * 0.035 + 0.57).rgb, vec3(0.33));
+          return c * (0.72 + lum * 0.75);
+        }`)
+      .replace('#include <map_fragment>', `
+        vec4 sw = vSplat / max(1e-4, vSplat.x + vSplat.y + vSplat.z + vSplat.w);
+        vec3 ground = vec3(0.0);
+        if (sw.x > 0.01) ground += groundTex(tGrass, vFowXZ) * sw.x;
+        if (sw.y > 0.01) ground += groundTex(tDirt, vFowXZ * 0.9) * sw.y;
+        if (sw.z > 0.01) ground += groundTex(tRock, vFowXZ * 0.6) * sw.z;
+        if (sw.w > 0.01) ground += groundTex(tSand, vFowXZ) * sw.w;
+        diffuseColor.rgb *= ground;`);
+  };
+  mat.customProgramCacheKey = () => 'terrain-splat|fowc';
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.castShadow = true;
+
+  // Paint worn earth around a footprint (structures, craters). Returns nothing;
+  // the GPU buffer is refreshed on the next frame.
+  mesh.userData.paintDirt = (x0, y0, w, h, margin = 0.9, strength = 1) => {
+    const i0 = Math.max(0, Math.floor((x0 - margin - 0.5) * RES)), i1 = Math.min(vw - 1, Math.ceil((x0 + w + margin + 0.5) * RES));
+    const j0 = Math.max(0, Math.floor((y0 - margin - 0.5) * RES)), j1 = Math.min(vh - 1, Math.ceil((y0 + h + margin + 0.5) * RES));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const x = i / RES, y = j / RES;
+        const dx = Math.max(x0 - x, 0, x - (x0 + w)), dy = Math.max(y0 - y, 0, y - (y0 + h));
+        const edge = (patch2(x * 3.1, y * 3.1) - 0.5) * 0.7;
+        const a = (1 - smooth(margin * 0.35, margin, Math.hypot(dx, dy) + edge)) * strength;
+        if (a <= 0) continue;
+        const k = j * vw + i;
+        if (heights[k] < 0.05) continue;
+        const keepRock = splat[k * 4 + 2];
+        const s = 1 - a;
+        splat[k * 4] *= s; splat[k * 4 + 3] *= s;
+        splat[k * 4 + 1] = splat[k * 4 + 1] * s + a * (1 - keepRock);
+        splat[k * 4 + 2] = keepRock;
+      }
+    }
+    splatAttr.needsUpdate = true;
+  };
   return mesh;
 }
 
@@ -294,26 +327,50 @@ function colored(geo, hex) {
   return g;
 }
 
-function conifer() {
-  const parts = [colored(new THREE.CylinderGeometry(0.035, 0.05, 0.3, 5).translate(0, 0.15, 0), '#5a4030')];
-  [[0.28, 0.42, 0.3], [0.22, 0.36, 0.52], [0.15, 0.3, 0.72]].forEach(([r, h, y], i) => {
-    parts.push(colored(new THREE.ConeGeometry(r, h, 7).translate(0, y, 0), ['#2f5a2a', '#356530', '#3c6f35'][i]));
+// Tree parts are built in a neutral colour so each instance can be tinted.
+function coniferCrown() {
+  const parts = [];
+  [[0.27, 0.42, 0.34], [0.22, 0.38, 0.55], [0.16, 0.32, 0.74], [0.09, 0.22, 0.9]].forEach(([r, h, y], i) => {
+    const g = new THREE.ConeGeometry(r, h, 8).translate(0, y, 0);
+    parts.push(colored(g, ['#cfcfcf', '#dadada', '#e4e4e4', '#efefef'][i]));
   });
   return mergeGeometries(parts);
 }
 
-function broadleaf() {
-  const trunk = colored(new THREE.CylinderGeometry(0.04, 0.06, 0.4, 5).translate(0, 0.2, 0), '#5d4532');
-  const crown = new THREE.IcosahedronGeometry(0.3, 1);
-  const p = crown.attributes.position;
-  const rng = createRng(3);
-  for (let i = 0; i < p.count; i++) {
-    const s = 0.85 + rng.next() * 0.3;
-    p.setXYZ(i, p.getX(i) * s, p.getY(i) * s * 0.85, p.getZ(i) * s);
+function broadleafCrown(seed) {
+  const rng = createRng(seed);
+  const parts = [];
+  // A cluster of lumpy blobs reads as a real canopy rather than a ball.
+  const blobs = [[0, 0.62, 0, 0.3], [0.16, 0.55, 0.08, 0.22], [-0.14, 0.56, -0.1, 0.22], [0.02, 0.78, -0.04, 0.2], [-0.06, 0.52, 0.16, 0.18]];
+  blobs.forEach(([x, y, z, r], bi) => {
+    // Only the main blob gets the finer mesh; the others stay low-poly.
+    const g = new THREE.IcosahedronGeometry(r, bi === 0 ? 1 : 0);
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const sc = 0.82 + rng.next() * 0.32;
+      p.setXYZ(i, p.getX(i) * sc, p.getY(i) * sc * 0.85, p.getZ(i) * sc);
+    }
+    g.translate(x, y, z);
+    g.computeVertexNormals();
+    parts.push(colored(g, rng.next() < 0.5 ? '#e0e0e0' : '#f2f2f2'));
+  });
+  return mergeGeometries(parts);
+}
+
+function trunk(height, r) {
+  const g = new THREE.CylinderGeometry(r * 0.7, r, height, 6).translate(0, height / 2, 0);
+  return colored(g, '#5a4433');
+}
+
+function shrub(seed) {
+  const rng = createRng(seed);
+  const parts = [];
+  for (let i = 0; i < 3; i++) {
+    const g = new THREE.IcosahedronGeometry(0.16 + rng.next() * 0.06, 0);
+    g.scale(1, 0.7, 1).translate((rng.next() - 0.5) * 0.18, 0.08, (rng.next() - 0.5) * 0.18);
+    parts.push(colored(g, '#e8e8e8'));
   }
-  crown.translate(0, 0.55, 0);
-  crown.computeVertexNormals();
-  return mergeGeometries([trunk, colored(crown, '#4a7a34')]);
+  return mergeGeometries(parts);
 }
 
 function boulder(seed) {
@@ -325,28 +382,41 @@ function boulder(seed) {
   for (let i = 0; i < p.count; i++) {
     const key = `${p.getX(i).toFixed(3)},${p.getY(i).toFixed(3)},${p.getZ(i).toFixed(3)}`;
     if (!cache.has(key)) cache.set(key, 0.75 + rng.next() * 0.45);
-    const s = cache.get(key);
-    p.setXYZ(i, p.getX(i) * s, p.getY(i) * s * 0.7, p.getZ(i) * s);
+    const sc = cache.get(key);
+    p.setXYZ(i, p.getX(i) * sc, p.getY(i) * sc * 0.7, p.getZ(i) * sc);
   }
   g.computeVertexNormals();
   return colored(g, '#8a8275');
 }
 
+const FOLIAGE = {
+  conifer: ['#2c4a22', '#33532a', '#3a5b2c', '#2a4424'],
+  summer: ['#4d7a2c', '#5a8632', '#44702a', '#668f38', '#3f6627'],
+  autumn: ['#c2621d', '#a8401b', '#d49a2a', '#8f4a1e', '#b8781f', '#9c5a24'],
+};
+
 export function buildVegetation(map, hf, seed) {
   const rng = createRng(seed + 1234);
+  const autumnField = makePatchNoise(seed + 77);
   const trees = { conifer: [], broadleaf: [] };
+  const shrubs = [];
   const rocks = [];
+  const occupiedByProp = (x, y) => map.occupied[y * map.w + x] === -1;
   for (let y = 0; y < map.h; y++) {
     for (let x = 0; x < map.w; x++) {
       const t = map.get(x, y);
+      if (occupiedByProp(x, y)) continue;
       if (t === Terrain.FOREST) {
         const n = 3 + rng.int(0, 2);
         for (let k = 0; k < n; k++) {
           const px = x + rng.range(0.1, 0.9), pz = y + rng.range(0.1, 0.9);
-          (rng.next() < 0.55 ? trees.conifer : trees.broadleaf).push([px, pz, rng.range(0.7, 1.15), rng.next() * Math.PI * 2]);
+          (rng.next() < 0.45 ? trees.conifer : trees.broadleaf).push([px, pz, rng.range(0.75, 1.2), rng.next() * Math.PI * 2]);
         }
-      } else if (t === Terrain.GRASS && rng.next() < 0.035 && !nearWell(map, x, y)) {
-        trees.broadleaf.push([x + rng.range(0.2, 0.8), y + rng.range(0.2, 0.8), rng.range(0.75, 1.1), rng.next() * 6.28]);
+        if (rng.next() < 0.5) shrubs.push([x + rng.next(), y + rng.next(), rng.range(0.8, 1.4), rng.next() * 6.28]);
+      } else if (t === Terrain.GRASS && !nearWell(map, x, y)) {
+        const r = rng.next();
+        if (r < 0.03) (rng.next() < 0.35 ? trees.conifer : trees.broadleaf).push([x + rng.range(0.2, 0.8), y + rng.range(0.2, 0.8), rng.range(0.8, 1.15), rng.next() * 6.28]);
+        else if (r < 0.09) shrubs.push([x + rng.next(), y + rng.next(), rng.range(0.6, 1.2), rng.next() * 6.28]);
       } else if (t === Terrain.ROCK && rng.next() < 0.35) {
         rocks.push([x + rng.range(0.1, 0.9), y + rng.range(0.1, 0.9), rng.range(0.4, 1.1), rng.next() * 6.28]);
       } else if ((t === Terrain.GRASS || t === Terrain.SAND) && rng.next() < 0.012) {
@@ -355,28 +425,42 @@ export function buildVegetation(map, hf, seed) {
     }
   }
   const group = new THREE.Group();
-  const mat = patchFow(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true }));
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), v = new THREE.Vector3();
+  const mat = patchFow(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, flatShading: true }));
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), v = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const tint = new THREE.Color();
-  const place = (geo, list, tintFn) => {
-    if (!list.length) return;
+  const place = (geo, list, tintFn, scaleY = 1) => {
+    if (!list.length) return null;
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
-    list.forEach(([x, z, sc, rot], i) => {
+    list.forEach(([x, z, s, rot], i) => {
       q.setFromAxisAngle(up, rot);
-      s.set(sc, sc * rng.range(0.9, 1.15), sc);
+      sc.set(s, s * scaleY, s);
       v.set(x, hf.heightAt(x, z) - 0.03, z);
-      m4.compose(v, q, s);
+      m4.compose(v, q, sc);
       mesh.setMatrixAt(i, m4);
-      mesh.setColorAt(i, tintFn(tint));
+      if (tintFn) mesh.setColorAt(i, tintFn(tint, x, z));
     });
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
+    return mesh;
   };
-  const greenTint = (c) => c.setHSL(0.25 + rng.range(-0.05, 0.06), rng.range(0.25, 0.6), rng.range(0.75, 1.0));
-  place(conifer(), trees.conifer, greenTint);
-  place(broadleaf(), trees.broadleaf, (c) => (rng.next() < 0.12 ? c.setHSL(0.09, 0.6, 0.85) : greenTint(c)));
+  const pick = (list) => list[Math.floor(rng.next() * list.length)];
+  const vary = (c) => c.offsetHSL((rng.next() - 0.5) * 0.02, (rng.next() - 0.5) * 0.1, (rng.next() - 0.5) * 0.06);
+  const broadTint = (c, x, z) => {
+    // Stands of autumn colour drift across the woods.
+    const autumn = autumnField(x * 0.8, z * 0.8) > 0.25 && rng.next() < 0.8;
+    return vary(c.set(pick(autumn ? FOLIAGE.autumn : FOLIAGE.summer)));
+  };
+  place(trunk(0.42, 0.045), trees.conifer, null);
+  place(coniferCrown(), trees.conifer, (c) => vary(c.set(pick(FOLIAGE.conifer))));
+  place(trunk(0.42, 0.055), trees.broadleaf, null);
+  place(broadleafCrown(seed), trees.broadleaf, broadTint);
+  // Shrubs stay green in the open; only those inside woodland turn.
+  place(shrub(seed + 5), shrubs, (c, x, z) => {
+    const inWoods = map.get(Math.floor(x), Math.floor(z)) === Terrain.FOREST;
+    return vary(c.set(pick(inWoods && autumnField(x * 0.8, z * 0.8) > 0.25 ? FOLIAGE.autumn : FOLIAGE.summer)));
+  });
   place(boulder(seed), rocks, (c) => c.setHSL(0.08, 0.08, rng.range(0.7, 1.0)));
   return group;
 }

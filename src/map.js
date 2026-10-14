@@ -38,6 +38,10 @@ export class GameMap {
     this.occupied = new Int32Array(w * h);
     this.wells = [];
     this.starts = [];
+    // Cosmetic dirt roads (lists of tiles) and civilian props such as
+    // farmhouses and windmills, which block movement like structures do.
+    this.roads = [];
+    this.props = [];
   }
 
   inBounds(x, y) {
@@ -170,7 +174,8 @@ export function generateMap(seed, w = 96, h = 96) {
     }
   }
   map.starts = starts;
-  carveRoad(map, starts[0], starts[1]);
+  const road = carveRoad(map, starts[0], starts[1]);
+  if (road) map.roads.push(road);
 
   // Oil wells: a pair near each base, then contested ones around the map.
   const wellSpots = [];
@@ -193,7 +198,59 @@ export function generateMap(seed, w = 96, h = 96) {
     map.tiles[p.y * w + p.x] = Terrain.GRASS;
     map.wells.push({ x: p.x, y: p.y, amount: OIL_PER_WELL });
   }
+  placeProps(map, rng);
   return map;
+}
+
+// Civilian scenery: farmsteads and windmills on open grassland, mirrored for
+// fairness, kept clear of bases, wells and the road. They block movement.
+const PROP_KINDS = [
+  { kind: 'house', w: 1, h: 1 },
+  { kind: 'house', w: 1, h: 1 },
+  { kind: 'barn', w: 2, h: 1 },
+  { kind: 'windmill', w: 1, h: 1 },
+  { kind: 'silo', w: 1, h: 1 },
+];
+
+function placeProps(map, rng) {
+  const roadTiles = new Set();
+  for (const road of map.roads) for (const p of road) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) roadTiles.add((p.y + dy) * map.w + (p.x + dx));
+  const free = (x, y, w, h) => {
+    for (let yy = y - 1; yy <= y + h; yy++) {
+      for (let xx = x - 1; xx <= x + w; xx++) {
+        if (!map.inBounds(xx, yy) || map.get(xx, yy) !== Terrain.GRASS || map.occupied[yy * map.w + xx]) return false;
+        if (roadTiles.has(yy * map.w + xx)) return false;
+      }
+    }
+    if (map.starts.some((s) => Math.hypot(s.x - x, s.y - y) < 15)) return false;
+    if (map.wells.some((wl) => Math.hypot(wl.x - x, wl.y - y) < 4)) return false;
+    if (map.props.some((p) => Math.hypot(p.x - x, p.y - y) < 2.5)) return false;
+    return true;
+  };
+  const add = (kind, x, y, w, h, rot) => {
+    map.props.push({ kind, x, y, w, h, rot });
+    map.setOccupied(x, y, w, h, -1);
+  };
+  let clusters = 0;
+  for (let attempt = 0; attempt < 400 && clusters < 5; attempt++) {
+    // A farmstead: two to four buildings near each other.
+    const cx = rng.int(6, map.w - 7), cy = rng.int(6, map.h - 7);
+    const mx = map.w - 1 - cx, my = map.h - 1 - cy;
+    if (Math.hypot(cx - mx, cy - my) < 10) continue;
+    const n = rng.int(2, 4);
+    const placed = [];
+    for (let k = 0; k < n * 6 && placed.length < n; k++) {
+      const t = rng.pick(PROP_KINDS);
+      const x = cx + rng.int(-3, 3), y = cy + rng.int(-3, 3);
+      const mxp = map.w - x - t.w, myp = map.h - y - t.h;
+      if (!free(x, y, t.w, t.h) || !free(mxp, myp, t.w, t.h)) continue;
+      const rot = (t.w === t.h ? rng.int(0, 3) : rng.int(0, 1) * 2) * (Math.PI / 2);
+      add(t.kind, x, y, t.w, t.h, rot);
+      add(t.kind, mxp, myp, t.w, t.h, rot + Math.PI);
+      placed.push(t);
+    }
+    if (placed.length) clusters++;
+  }
 }
 
 // Guarantee the bases are linked by land: find the cheapest route where water
@@ -206,13 +263,17 @@ function carveRoad(map, a, b) {
     moveCost: (x, y) => (map.isLand(x, y) ? 1 : 8),
   };
   const path = findPath(costMap, a.x, a.y, b.x, b.y, 'ground', map.w * map.h * 4, false);
-  if (!path) return;
+  if (!path) return null;
   for (const p of path) {
     for (let dy = 0; dy <= 1; dy++) {
       for (let dx = 0; dx <= 1; dx++) {
         const x = p.x + dx, y = p.y + dy;
-        if (map.inBounds(x, y) && !map.isLand(x, y)) map.tiles[y * map.w + x] = Terrain.SAND;
+        if (!map.inBounds(x, y)) continue;
+        // Water and rock become a causeway; forest along the road is cleared.
+        if (!map.isLand(x, y)) map.tiles[y * map.w + x] = Terrain.SAND;
+        else if (map.get(x, y) === Terrain.FOREST) map.tiles[y * map.w + x] = Terrain.GRASS;
       }
     }
   }
+  return path;
 }

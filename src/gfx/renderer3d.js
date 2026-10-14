@@ -4,24 +4,22 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { HorizontalTiltShiftShader } from 'three/addons/shaders/HorizontalTiltShiftShader.js';
-import { VerticalTiltShiftShader } from 'three/addons/shaders/VerticalTiltShiftShader.js';
 import { BUILDINGS, UNITS, WEAPONS, OIL_PER_WELL, Terrain } from '../config.js';
 import { HeightField, WATER_LEVEL } from './heightfield.js';
 import { buildTerrain, buildWater, buildVegetation, buildSky, FogOfWar, fowUniforms, patchFow } from './world.js';
-import { buildUnit, buildStructure, buildWell, materials } from './models.js';
+import { buildUnit, buildStructure, buildWell, buildProp, materials } from './models.js';
+import { buildGroundTextures } from './textures.js';
 import { Particles } from './particles.js';
 
 patchFow(materials.body, { clouds: true });
 
-export const CAMERA = { minDist: 7, maxDist: 58, defaultDist: 22 };
+export const CAMERA = { minDist: 7, maxDist: 58, defaultDist: 24 };
 const DECAL_LIFE = 30; // seconds a scorch mark stays on the ground
 const DECAL_FADE = 8; // seconds spent fading out at the end
 const SUN_DIR = new THREE.Vector3(-0.55, 1.0, -0.42).normalize();
 const AIR_ALT = { drone: 3.4, heli: 1.9, fighter: 2.9, bomber: 3.2 };
 // Units are drawn larger than their footprint so they read at strategy zoom.
-const UNIT_SCALE = { drone: 1.6, infantry: 1.6, rocketeer: 1.6, truck: 1.3, scout: 1.35, tank: 1.3, aa: 1.3, artillery: 1.25, heli: 1.3, fighter: 1.15, bomber: 0.95, gunboat: 1.25, destroyer: 1.2 };
+const UNIT_SCALE = { drone: 1.4, infantry: 1.35, rocketeer: 1.35, truck: 1.15, scout: 1.15, tank: 1.15, aa: 1.15, artillery: 1.1, heli: 1.15, fighter: 1.05, bomber: 0.9, gunboat: 1.1, destroyer: 1.05 };
 
 export class Renderer3D {
   constructor(canvas, overlay, game, viewer = 0, quality = 'high') {
@@ -44,12 +42,12 @@ export class Renderer3D {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog('#c3d3dc', 40, 140);
-    this.camera = new THREE.PerspectiveCamera(42, 1, 0.3, 1200);
+    this.scene.fog = new THREE.Fog('#cdd8dc', 40, 140);
+    this.camera = new THREE.PerspectiveCamera(36, 1, 0.3, 1200);
 
     this.buildWorld();
     this.buildLights();
@@ -63,14 +61,8 @@ export class Renderer3D {
       this.gtao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.5, scale: 1.2, samples: 12 });
       this.gtao.blendIntensity = 0.85;
       this.composer.addPass(this.gtao);
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.5, 0.82);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.22, 0.4, 0.9);
       this.composer.addPass(this.bloom);
-      // Gentle tilt-shift blur toward the screen edges for a diorama feel.
-      this.tiltH = new ShaderPass(HorizontalTiltShiftShader);
-      this.tiltV = new ShaderPass(VerticalTiltShiftShader);
-      this.tiltH.uniforms.r.value = this.tiltV.uniforms.r.value = 0.5;
-      this.composer.addPass(this.tiltH);
-      this.composer.addPass(this.tiltV);
       this.composer.addPass(new OutputPass());
     }
     this.raycaster = new THREE.Raycaster();
@@ -84,7 +76,19 @@ export class Renderer3D {
     this.hf = new HeightField(game.map, game.seed);
     this.fow = new FogOfWar(game.map);
     this.scene.add(buildSky());
-    this.terrain = buildTerrain(game.map, this.hf, game.seed);
+    this.terrain = buildTerrain(game.map, this.hf, game.seed, buildGroundTextures(game.seed, this.renderer));
+    this.paintDirt = this.terrain.userData.paintDirt;
+    // Farmsteads and windmills, each on a patch of trodden earth.
+    this.sails = [];
+    for (const pr of game.map.props) {
+      const m = buildProp(pr.kind);
+      const cx = pr.x + pr.w / 2, cz = pr.y + pr.h / 2;
+      m.root.position.set(cx, this.hf.maxOver(pr.x, pr.y, pr.w, pr.h) - 0.03, cz);
+      m.root.rotation.y = pr.rot;
+      if (m.sails) this.sails.push(m.sails);
+      this.scene.add(m.root);
+      this.paintDirt(pr.x, pr.y, pr.w, pr.h, 0.7, 0.55);
+    }
     this.water = buildWater(game.map);
     this.vegetation = buildVegetation(game.map, this.hf, game.seed);
     this.scene.add(this.terrain, this.water, this.vegetation);
@@ -99,9 +103,9 @@ export class Renderer3D {
   }
 
   buildLights() {
-    this.hemi = new THREE.HemisphereLight('#cfe3ff', '#5a4a36', 0.9);
+    this.hemi = new THREE.HemisphereLight('#dde9f5', '#6b5a40', 1.0);
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight('#fff1d6', 2.6);
+    this.sun = new THREE.DirectionalLight('#fff4e2', 2.9);
     this.sun.castShadow = true;
     const res = this.quality === 'high' ? 4096 : 2048;
     this.sun.shadow.mapSize.set(res, res);
@@ -168,10 +172,6 @@ export class Renderer3D {
     this.width = w; this.height = h;
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
-    if (this.tiltH) {
-      this.tiltH.uniforms.h.value = 1.1 / w;
-      this.tiltV.uniforms.v.value = 1.1 / h;
-    }
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     const pr = this.renderer.getPixelRatio();
@@ -183,7 +183,8 @@ export class Renderer3D {
 
   applyCamera(cam) {
     const t = (cam.zoom - CAMERA.minDist) / (CAMERA.maxDist - CAMERA.minDist);
-    const pitch = THREE.MathUtils.lerp(0.62, 1.0, Math.min(1, Math.max(0, t)) ** 0.8);
+    // A fairly high, steady angle like classic RTS games; flattens a little up close.
+    const pitch = THREE.MathUtils.lerp(0.8, 1.08, Math.min(1, Math.max(0, t)) ** 0.8);
     const ty = Math.max(WATER_LEVEL, this.hf.heightAt(cam.x, cam.y)) * 0.5;
     this.camera.position.set(cam.x, ty + Math.sin(pitch) * cam.zoom, cam.y + Math.cos(pitch) * cam.zoom);
     this.camera.lookAt(cam.x, ty, cam.y);
@@ -328,7 +329,10 @@ export class Renderer3D {
           else {
             const h = this.hf.groundAt(ev.x, ev.y);
             P.impact(ev.x, h, ev.y, ev.splash);
-            if (ev.splash) this.addDecal(ev.x, ev.y, ev.splash * 1.2);
+            if (ev.splash) {
+              this.addDecal(ev.x, ev.y, ev.splash * 1.2);
+              this.paintDirt(ev.x - 0.1, ev.y - 0.1, 0.2, 0.2, ev.splash * 0.6, 0.45);
+            }
           }
           break;
         }
@@ -338,7 +342,10 @@ export class Renderer3D {
           if (ev.infantry) { P.blood(ev.x, h + 0.1, ev.y); audio?.play('die', ev.x, ev.y); }
           else {
             P.explosion(ev.x, h, ev.y, ev.size * 0.8);
-            if (!ev.air) this.addDecal(ev.x, ev.y, ev.size * 1.1);
+            if (!ev.air) {
+              this.addDecal(ev.x, ev.y, ev.size * 1.1);
+              if (ev.size >= 1.5) this.paintDirt(ev.x - 0.2, ev.y - 0.2, 0.4, 0.4, ev.size * 0.45, 0.8);
+            }
             audio?.play('explode', ev.x, ev.y, ev.size);
           }
           break;
@@ -402,6 +409,7 @@ export class Renderer3D {
     this.applyCamera(cam);
     this.fow.update(this.game.players[this.viewer], dt);
     this.water.userData.normal.offset.set(this.time * 0.012, this.time * 0.008);
+    for (const sl of this.sails) sl.rotation.z += dt * 0.7;
 
     this.syncEntities(alpha, dt);
     this.updateWells(dt);
@@ -429,7 +437,11 @@ export class Renderer3D {
       v.ent = e;
       const visible = this.isVisible(e);
       if (e.kind === 'building') {
-        if (visible) v.seen = true;
+        if (visible && !v.seen) {
+          v.seen = true;
+          // Construction churns up the ground; only paint it once it is seen.
+          this.paintDirt(e.tx, e.ty, e.w, e.h, 0.75, 0.9);
+        }
         v.root.visible = visible || !!v.seen;
         if (visible) this.updateBuilding(v, e, dt);
       } else {
