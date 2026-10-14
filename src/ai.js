@@ -2,7 +2,7 @@ import { BUILDINGS, UNITS, TICK_RATE } from './config.js';
 
 // Scripted opponent. It issues the same commands a human would through the
 // Game command API, so it plays by the same economic rules.
-const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'shipyard', 'samsite', 'airfield', 'refinery', 'turret', 'samsite'];
+const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'depot', 'shipyard', 'samsite', 'airfield', 'refinery', 'turret', 'samsite'];
 
 const ARMY_MIX = {
   barracks: ['infantry', 'infantry', 'rocketeer'],
@@ -49,8 +49,37 @@ export class AIController {
     this.manageEconomy();
     this.manageConstruction();
     this.manageProduction();
+    this.manageRepairs();
     this.manageArmy();
     this.manageScouting();
+  }
+
+  // Switch on repair for damaged structures and pull badly hurt vehicles,
+  // aircraft and ships back to a facility that can fix them.
+  manageRepairs() {
+    const g = this.game;
+    const p = this.player;
+    for (const b of this.mine((e) => e.kind === 'building' && e.progress >= 1)) {
+      if (!b.repairing && b.hp < b.maxHp * 0.75 && p.credits > 300) g.cmdRepair(this.id, b.id, true);
+    }
+    const facilities = this.mine((e) => e.kind === 'building' && e.progress >= 1 && e.def.repairs);
+    for (const u of this.mine((e) => e.kind === 'unit' && !e.def.harvester)) {
+      if (u.aiServicing) {
+        // Done, or the facility is gone: rejoin the army.
+        const kind = g.repairDomain(u);
+        if (u.hp >= u.maxHp * 0.95 || !facilities.some((b) => b.def.repairs === kind)) u.aiServicing = false;
+        continue;
+      }
+      if (u.hp > u.maxHp * 0.4 || u.order.type !== 'idle') continue;
+      const kind = g.repairDomain(u);
+      let best = null, bestD = Infinity;
+      for (const b of facilities) {
+        if (b.def.repairs !== kind) continue;
+        const d = Math.hypot(b.x - u.x, b.y - u.y);
+        if (d < bestD) { bestD = d; best = b; }
+      }
+      if (best && g.cmdService(this.id, [u.id], best.id)) u.aiServicing = true;
+    }
   }
 
   // Keep one recon drone flying between oil fields and the enemy base.
@@ -163,7 +192,8 @@ export class AIController {
 
   manageArmy() {
     const g = this.game;
-    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester && !e.def.scout);
+    // Units heading to (or sitting at) a repair facility sit out attacks.
+    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester && !e.def.scout && !e.aiServicing);
     const hq = this.mine((e) => e.type === 'hq')[0] || this.mine((e) => e.kind === 'building')[0];
 
     // Defend: if enemies are near our base, everyone idle responds.

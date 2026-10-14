@@ -482,6 +482,36 @@ export function buildStructure(type, owner, w, h) {
         p.cyl(0.01, 0.01, 0.8, '#333', { x: 0.0, y: 0.9, z: 0.4 }, 4);
       });
       break;
+    case 'depot':
+      root = cached(key, team, (p) => {
+        slab(p, W, D);
+        // Open-fronted service bay.
+        p.box(1.2, 0.5, 0.06, '#9a988e', { x: -0.15, y: 0.37, z: -0.72 });
+        p.box(0.06, 0.5, 0.9, '#9a988e', { x: -0.72, y: 0.37, z: -0.3 });
+        p.box(0.06, 0.5, 0.9, '#9a988e', { x: 0.42, y: 0.37, z: -0.3 });
+        p.box(1.26, 0.05, 1.0, '#7f7d75', { x: -0.15, y: 0.64, z: -0.28 });
+        p.box(1.27, 0.06, 0.04, 'team', { x: -0.15, y: 0.6, z: 0.2 });
+        // Vehicle lift with hazard stripes.
+        p.box(0.9, 0.04, 0.5, '#3c3e38', { x: -0.15, y: 0.14, z: -0.3 });
+        for (let i = 0; i < 5; i++) p.box(0.08, 0.005, 0.5, i % 2 ? '#222' : '#e0b030', { x: -0.5 + i * 0.18, y: 0.165, z: 0.02, sz: 0.1 });
+        for (const x of [-0.5, 0.2]) p.box(0.05, 0.22, 0.05, '#d1a43a', { x, y: 0.25, z: -0.3 });
+        // Wrench sign on the roof.
+        p.box(0.06, 0.26, 0.02, 'team', { x: -0.15, y: 0.82, z: 0.18, rz: 0.6 });
+        p.cyl(0.07, 0.07, 0.02, 'team', { x: -0.08, y: 0.93, z: 0.18, rx: Math.PI / 2 }, 10);
+        // Drums and tyres around the yard.
+        for (const [x, z] of [[0.75, 0.6], [0.62, 0.72], [0.78, 0.38]]) p.cyl(0.07, 0.07, 0.18, '#3f6b8a', { x, y: 0.21, z }, 10);
+        for (let i = 0; i < 3; i++) p.cyl(0.1, 0.1, 0.05, '#1c1c1c', { x: -0.72, y: 0.15 + i * 0.05, z: 0.68 }, 12);
+      });
+      // Crane arm that swings while repairing.
+      parts.crane = cached(key + ':c', team, (p) => {
+        p.cyl(0.05, 0.06, 0.6, '#d1a43a', { y: 0.3 }, 8);
+        p.box(0.7, 0.05, 0.05, '#d1a43a', { x: -0.3, y: 0.6 });
+        p.cyl(0.006, 0.006, 0.3, '#222', { x: -0.6, y: 0.45 }, 4);
+        p.box(0.06, 0.04, 0.06, '#333', { x: -0.6, y: 0.3 });
+      });
+      parts.crane.position.set(0.72, 0.12, -0.6);
+      root.add(parts.crane);
+      break;
     case 'turret':
       root = cached(key, team, (p) => {
         slab(p, W, D);

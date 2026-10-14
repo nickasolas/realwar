@@ -30,11 +30,18 @@ npm start            # http://localhost:8080
   Center or Supply Depot. Wells run dry, so expansion matters.
 - **Base building:** Structures are placed from the sidebar within range of your
   base, one at a time. Tech tree: Command Center → Barracks → Vehicle Plant →
-  Airbase; Barracks → Naval Yard (shoreline only); plus Gun Turrets and SAM Sites.
+  Airbase / Service Depot; Barracks → Naval Yard (shoreline only); plus Gun Turrets and SAM Sites.
 - **Units:** Recon Drones (unarmed, long-sight scouts from the Command Center), Rifle Squads, Rocket Teams, Scout Buggies, Battle Tanks, Flak
   Tracks, Howitzers, Attack Helicopters, Interceptors, Strike Bombers, Patrol
   Boats and Missile Cruisers. Weapons only hit certain domains (ground/naval/air)
   and deal different damage per armor class, so army composition counts.
+- **Repair:** select a damaged structure and press **R** (or its Repair
+  button) to repair it gradually for credits. Vehicles repair at a **Service
+  Depot**, aircraft at an **Airbase**, ships at a **Naval Yard**: right-click
+  the facility, or press **R** with units selected to send them to the
+  nearest one. Infantry heal for free near a Barracks or Command Center.
+  Repairs run at half speed under fire and pause when funds run out.
+  Tuning lives in `REPAIR` in `src/config.js`.
 - **Win:** destroy every enemy structure.
 
 ### Controls
@@ -45,6 +52,7 @@ npm start            # http://localhost:8080
 | Right-click | Move · attack · harvest a well · set a rally point (with a structure selected) |
 | A + click | Attack-move |
 | S / H | Stop / jump to HQ |
+| R | Repair selected structure, or send selected units for repairs |
 | Ctrl+1–9, 1–9 | Assign / recall group (press twice to center) |
 | Arrows, screen edge, middle-drag, wheel | Scroll and zoom |
 | P, +/-, M, Del | Pause, game speed, mute, sell structure |

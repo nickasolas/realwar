@@ -160,6 +160,15 @@ function issueContextOrder(wx, wy, target = null) {
     return;
   }
   const ids = units.map((u) => u.id);
+  if (target && target.owner === ME && target.kind === 'building' && target.def.repairs) {
+    const sent = game.cmdService(ME, ids, target.id);
+    if (sent) {
+      marker(target.x, target.y, '#5fd0ff');
+      const others = units.filter((u) => game.repairDomain(u) !== target.def.repairs).map((u) => u.id);
+      if (others.length) game.cmdMove(ME, others, wx, wy);
+      return;
+    }
+  }
   if (target && target.owner !== ME) {
     game.cmdAttack(ME, ids, target.id);
     marker(target.x, target.y, '#ff5a4f');
@@ -351,6 +360,20 @@ window.addEventListener('keydown', (e) => {
     case '-':
       speed = Math.max(0.5, speed - 0.5); notify(`Game speed ${speed}x`);
       break;
+    case 'r': {
+      // Buildings: toggle repair. Units: go to the nearest repair facility.
+      const blds = selectedEntities().filter((x) => x.kind === 'building' && x.owner === ME && x.progress >= 1);
+      if (blds.length) {
+        const turnOn = blds.some((b) => !b.repairing && b.hp < b.maxHp);
+        for (const b of blds) game.cmdRepair(ME, b.id, turnOn && b.hp < b.maxHp);
+        notify(turnOn ? 'Repairing.' : 'Repair stopped.');
+      } else if (myUnits().length) {
+        const n = sendForRepair(myUnits());
+        notify(n ? `${n} unit${n > 1 ? 's' : ''} heading for repairs.` : 'No damaged units with a repair facility available.', !n);
+      }
+      refreshSidebar(true);
+      break;
+    }
     case 'delete': {
       const b = selectedEntities().find((x) => x.kind === 'building' && x.owner === ME);
       if (b) game.cmdSell(ME, b.id);
@@ -439,7 +462,7 @@ function refreshSidebar(force = false) {
 
   // Selection panel.
   const sel = selectedEntities();
-  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}`).join('|');
+  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${game.tick - (e.repairedAt ?? -1e9) < 10}`).join('|');
   if (!force && key === lastSidebarKey) return;
   lastSidebarKey = key;
   if (!sel.length) { sidebar.sel.innerHTML = '<div class="hint">Nothing selected.</div>'; return; }
@@ -453,10 +476,19 @@ function refreshSidebar(force = false) {
       if (w) detail += `<div>Weapon range ${w.range} · hits ${w.hits.join('/')}</div>`;
       else if (e.def.scout) detail += `<div>Unarmed scout · sight ${e.def.sight}</div>`;
       if (e.def.harvester) detail += `<div>Cargo: ${Math.round(e.cargo)} / 150</div>`;
+      if (e.owner === ME && e.hp < e.maxHp) detail += `<div class="hint">${repairHint(e)}</div>`;
     } else {
       if (e.progress < 1) detail += `<div>Under construction: ${Math.round(e.progress * 100)}%</div>`;
       if (e.queue?.length) detail += `<div>Queue: ${e.queue.map((q) => UNITS[q.type].name).join(', ')}</div>`;
-      if (e.owner === ME && e.type !== 'hq') detail += `<button class="small" data-sell="${e.id}">Sell (Del)</button>`;
+      if (e.def.repairs) detail += `<div class="hint">Repairs ${{ ground: 'vehicles', air: 'aircraft', naval: 'ships' }[e.def.repairs]} nearby</div>`;
+      if (e.owner === ME && e.progress >= 1) {
+        if (e.repairing) detail += `<div class="${e.repairStalled ? 'warn-text' : 'ok-text'}">${e.repairStalled ? 'Repair paused: insufficient funds' : 'Repairing…'}</div>`;
+        let btns = '';
+        if (e.repairing) btns += `<button class="small" data-repair="${e.id}">Stop repair (R)</button>`;
+        else if (e.hp < e.maxHp) btns += `<button class="small" data-repair="${e.id}">Repair (R)</button>`;
+        if (e.type !== 'hq') btns += `<button class="small" data-sell="${e.id}">Sell (Del)</button>`;
+        if (btns) detail += `<div class="btn-row">${btns}</div>`;
+      }
     }
     sidebar.sel.innerHTML = `<div class="sel-title" style="color:${owner.color}">${e.def.name}</div>
       <div class="hpbar"><span style="width:${(100 * e.hp) / e.maxHp}%"></span></div>
@@ -470,7 +502,36 @@ function refreshSidebar(force = false) {
   }
 }
 
+function repairHint(u) {
+  const kind = game.repairDomain(u);
+  if (kind === 'infantry') return 'Heals near a Barracks or Command Center';
+  const where = { ground: 'Service Depot', air: 'Airbase', naval: 'Naval Yard' }[kind];
+  return `Repair at a ${where}: press R or right-click it`;
+}
+
+// Send selected damaged units to the nearest facility that can repair them.
+function sendForRepair(units) {
+  let sent = 0;
+  for (const u of units) {
+    if (u.hp >= u.maxHp) continue;
+    const kind = game.repairDomain(u);
+    let best = null, bestD = Infinity;
+    for (const b of game.entities.values()) {
+      if (b.owner !== ME || b.kind !== 'building' || b.progress < 1) continue;
+      if (kind === 'infantry' ? !b.def.healsInfantry : b.def.repairs !== kind) continue;
+      const d = Math.hypot(b.x - u.x, b.y - u.y);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    if (!best) continue;
+    if (kind === 'infantry') game.cmdMove(ME, [u.id], best.x, best.y + best.h / 2 + 1);
+    else game.cmdService(ME, [u.id], best.id);
+    sent++;
+  }
+  return sent;
+}
+
 function describeOrder(u) {
+  if (game.tick - (u.repairedAt ?? -1e9) < 10) return u.def.armor === 'infantry' ? 'Healing' : 'Being repaired';
   if (u.order.type === 'harvest') return { toWell: 'Heading to oil', loading: 'Pumping oil', toDropoff: 'Returning cargo' }[u.harvestState] || 'Harvesting';
   if (u.order.type === 'attack') return 'Attacking';
   if (u.order.type === 'attackMove') return 'Attack-moving';
@@ -513,6 +574,8 @@ $('sidebar').addEventListener('pointerdown', (e) => {
       if (!ok) notify(game.players[ME].credits < UNITS[type].cost ? 'Insufficient funds.' : 'Production queue full.', true);
       else audio.blip(990);
     }
+  } else if (btn.dataset.repair) {
+    game.cmdRepair(ME, Number(btn.dataset.repair));
   } else if (btn.dataset.sell) {
     game.cmdSell(ME, Number(btn.dataset.sell));
     ui.selected.clear();
@@ -558,6 +621,7 @@ function showEnd() {
     <tr><td>Enemies destroyed</td><td>${me.killed}</td><td>${foe.killed}</td></tr>
     <tr><td>Losses</td><td>${me.lost}</td><td>${foe.lost}</td></tr>
     <tr><td>Oil harvested</td><td>$${me.harvested}</td><td>$${foe.harvested}</td></tr>
+    <tr><td>Spent on repairs</td><td>$${Math.round(me.repairSpent)}</td><td>$${Math.round(foe.repairSpent)}</td></tr>
     <tr><td>Mission time</td><td colspan="2">${Math.floor(t / 60)}m ${t % 60}s</td></tr>`;
   $('endscreen').classList.remove('hidden');
 }

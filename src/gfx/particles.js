@@ -237,6 +237,19 @@ export class Particles {
     });
   }
 
+  // Blue-white welding sparks for repairs.
+  weld(x, y, z) {
+    this.fire.spawn({ x, y, z, life: 0.08, size: 0.18, size1: 0.05, color: [0.75, 0.9, 1, 1], color1: [0.4, 0.7, 1, 0] });
+    for (let i = 0; i < 3; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.fire.spawn({
+        x, y, z, vx: Math.cos(a) * rnd(0.4, 1.2), vy: rnd(0.6, 1.6), vz: Math.sin(a) * rnd(0.4, 1.2),
+        life: rnd(0.25, 0.5), size: 0.05, size1: 0.02, gravity: 5, drag: 0.4,
+        color: [1, 0.95, 0.75, 1], color1: [1, 0.6, 0.2, 0],
+      });
+    }
+  }
+
   blood(x, y, z) {
     for (let i = 0; i < 4; i++) this.smoke.spawn({ x, y, z, vx: rnd(-0.5, 0.5), vy: rnd(0.3, 0.8), vz: rnd(-0.5, 0.5), life: 0.4, size: 0.08, size1: 0.12, gravity: 3, color: [0.4, 0.05, 0.05, 0.9], color1: [0.3, 0.03, 0.03, 0] });
     this.dust(x, y, z, 3, 0.15);

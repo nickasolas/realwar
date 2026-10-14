@@ -459,6 +459,13 @@ export class Renderer3D {
     v.scaffold.visible = !built;
     const P = this.particles;
     if (v.parts.dish) v.parts.dish.rotation.y += dt * 0.8;
+    const servicing = this.game.tick - (e.servicingAt ?? -1e9) < 10;
+    if (v.parts.crane) v.parts.crane.rotation.y = Math.sin(this.time * (servicing ? 1.6 : 0.3)) * (servicing ? 1.1 : 0.4);
+    // Welding sparks dance over a structure while it is being repaired.
+    if (this.recentlyRepaired(e) && Math.random() < dt * 10) {
+      const base = v.root.position;
+      this.particles.weld(base.x + (Math.random() - 0.5) * e.w * 0.8, base.y + 0.3 + Math.random() * 0.7, base.z + (Math.random() - 0.5) * e.h * 0.8);
+    }
     if (v.parts.turret && e.target != null) {
       const t = this.game.get(e.target);
       if (t) v.parts.turret.rotation.y = approachAngle(v.parts.turret.rotation.y, -Math.atan2(t.y - e.y, t.x - e.x), dt * 4);
@@ -537,12 +544,36 @@ export class Renderer3D {
       const want = t ? -(Math.atan2(t.y - e.y, t.x - e.x) - ang) : 0;
       v.parts.turret.rotation.y = approachAngle(v.parts.turret.rotation.y, want, dt * 5);
     }
+    if (this.recentlyRepaired(e) && e.def.armor !== 'infantry' && Math.random() < dt * 8) {
+      this.particles.weld(r.position.x + (Math.random() - 0.5) * 0.4, r.position.y + 0.3, r.position.z + (Math.random() - 0.5) * 0.4);
+    }
     // Burning wrecks-to-be.
     v.smokeT -= dt;
     if (v.smokeT <= 0 && e.hp / e.maxHp < 0.4 && e.def.armor !== 'infantry') {
       v.smokeT = 0.15;
       P.damageSmoke(r.position.x, r.position.y + 0.35, r.position.z, e.hp / e.maxHp < 0.2);
     }
+  }
+
+  recentlyRepaired(e) {
+    return this.game.tick - (e.repairedAt ?? -1e9) < 10;
+  }
+
+  // Round badge with a wrench: blue while repairing, red when out of funds.
+  drawRepairBadge(ctx, x, y, stalled) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = stalled ? '#7a1f1a' : '#173a52';
+    ctx.strokeStyle = stalled ? '#ff6a5f' : '#5fd0ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = '#e8f4ff';
+    ctx.fillRect(-1.3, -1, 2.6, 7);
+    ctx.beginPath(); ctx.arc(0, -3, 3.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = stalled ? '#7a1f1a' : '#173a52';
+    ctx.fillRect(-1.1, -7, 2.2, 4);
+    ctx.restore();
   }
 
   updateWells(dt) {
@@ -670,6 +701,9 @@ export class Renderer3D {
         const q = e.queue[0];
         ctx.fillStyle = '#ffd34d';
         ctx.fillRect(p.x - w / 2, p.y + 6, w * Math.min(1, q.elapsed / UNITS[q.type].buildTime), 3);
+      }
+      if (this.recentlyRepaired(e) || (e.repairing && e.owner === this.viewer)) {
+        this.drawRepairBadge(ctx, p.x + w / 2 + 12, p.y + 2, !!e.repairStalled && !this.recentlyRepaired(e));
       }
     }
     ctx.font = '600 13px system-ui, sans-serif';

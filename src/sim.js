@@ -1,6 +1,6 @@
 import {
   DT, TICK_RATE, UNITS, BUILDINGS, WEAPONS, FACTIONS, STARTING_CREDITS,
-  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS,
+  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR,
 } from './config.js';
 import { generateMap } from './map.js';
 import { findPath } from './path.js';
@@ -8,6 +8,7 @@ import { createRng } from './rng.js';
 
 const MAX_QUEUE = 5;
 const FOG_INTERVAL = 4; // ticks between visibility refreshes
+const REPAIR_INTERVAL = 5; // ticks between repair updates
 
 export function damageAgainst(weapon, armor) {
   return weapon.damage * (weapon.vs?.[armor] ?? 1);
@@ -39,7 +40,7 @@ export class Game {
       constructing: null, // id of the structure currently being built
       visible: new Uint8Array(this.map.w * this.map.h),
       explored: new Uint8Array(this.map.w * this.map.h),
-      stats: { killed: 0, lost: 0, harvested: 0 },
+      stats: { killed: 0, lost: 0, harvested: 0, repairSpent: 0 },
     }));
     for (const p of this.players) this.setupBase(p);
     this.updateFog();
@@ -234,6 +235,33 @@ export class Game {
     return !!item;
   }
 
+  // Toggle paid repair on a damaged, finished structure.
+  cmdRepair(playerId, buildingId, on) {
+    const b = this.get(buildingId);
+    if (!b || b.owner !== playerId || b.kind !== 'building' || b.progress < 1) return false;
+    const want = on ?? !b.repairing;
+    if (want && b.hp >= b.maxHp) return false;
+    b.repairing = want;
+    if (!want) b.repairStalled = false;
+    return true;
+  }
+
+  // Send units to a structure that services their domain (Service Depot,
+  // Airbase, Naval Yard). Returns how many units were sent.
+  cmdService(playerId, ids, buildingId) {
+    const b = this.get(buildingId);
+    if (!b || b.owner !== playerId || b.kind !== 'building' || !b.def.repairs) return 0;
+    const units = this.ownedUnits(playerId, ids).filter((u) => this.repairDomain(u) === b.def.repairs);
+    if (units.length) this.cmdMove(playerId, units.map((u) => u.id), b.x, b.y);
+    return units.length;
+  }
+
+  // Which facility kind can repair this unit ('ground' | 'air' | 'naval'),
+  // or 'infantry' for units healed for free near barracks.
+  repairDomain(u) {
+    return u.def.armor === 'infantry' ? 'infantry' : u.def.domain;
+  }
+
   cmdRally(playerId, buildingId, x, y) {
     const b = this.get(buildingId);
     if (!b || b.owner !== playerId || b.kind !== 'building') return false;
@@ -402,7 +430,7 @@ export class Game {
   applyDamage(target, amount, attackerOwner) {
     if (target.hp <= 0) return;
     target.hp -= amount;
-    if (target.kind === 'unit' && target.owner !== attackerOwner) target.hitAt = this.tick;
+    if (target.owner !== attackerOwner) target.hitAt = this.tick;
     if (target.kind === 'building') this.events.push({ type: 'underAttack', owner: target.owner, x: target.x, y: target.y });
     if (target.hp <= 0) this.destroy(target, attackerOwner);
   }
@@ -698,8 +726,53 @@ export class Game {
     }
     this.separate(units.filter((u) => this.entities.has(u.id)));
     this.updateProjectiles();
+    if (this.tick % REPAIR_INTERVAL === 0) this.updateRepairs();
     if (this.tick % FOG_INTERVAL === 0) this.updateFog();
     this.checkVictory();
+  }
+
+  // --------------------------------------------------------------- repair
+
+  updateRepairs() {
+    const dt = DT * REPAIR_INTERVAL;
+    const facilities = [];
+    for (const b of this.entities.values()) {
+      if (b.kind !== 'building' || b.progress < 1) continue;
+      if (b.def.repairs || b.def.healsInfantry) facilities.push(b);
+      if (!b.repairing) continue;
+      if (b.hp >= b.maxHp) { b.repairing = false; continue; }
+      this.heal(b, REPAIR.buildingRate, (b.def.repairValue ?? b.def.cost) * REPAIR.buildingCost, dt);
+      if (b.hp >= b.maxHp) b.repairing = false;
+    }
+    if (!facilities.length) return;
+    for (const u of this.entities.values()) {
+      if (u.kind !== 'unit' || u.hp >= u.maxHp) continue;
+      const kind = this.repairDomain(u);
+      const range = kind === 'infantry' ? REPAIR.infantryRange : REPAIR.facilityRange;
+      const at = facilities.find((b) => b.owner === u.owner
+        && (kind === 'infantry' ? b.def.healsInfantry : b.def.repairs === kind)
+        && this.distTo(u, b) <= range);
+      if (!at) continue;
+      const ok = kind === 'infantry' ? this.heal(u, REPAIR.infantryRate, 0, dt) : this.heal(u, REPAIR.unitRate, u.def.cost * REPAIR.unitCost, dt);
+      if (ok) at.servicingAt = this.tick;
+    }
+  }
+
+  // Restore HP at `rate` (fraction of max per second), paying `fullCost`
+  // pro rata. Slower while under fire; pauses when the owner can't pay.
+  heal(e, rate, fullCost, dt) {
+    const p = this.players[e.owner];
+    const underFire = this.tick - (e.hitAt ?? -1e9) < REPAIR.underFireWindow * TICK_RATE;
+    const amount = Math.min(e.maxHp - e.hp, e.maxHp * rate * dt * (underFire ? REPAIR.underFire : 1));
+    if (amount <= 0) return false;
+    const cost = (fullCost * amount) / e.maxHp;
+    if (p.credits < cost) { e.repairStalled = true; return false; }
+    p.credits -= cost;
+    p.stats.repairSpent += cost;
+    e.hp += amount;
+    e.repairStalled = false;
+    e.repairedAt = this.tick;
+    return true;
   }
 
   checkVictory() {

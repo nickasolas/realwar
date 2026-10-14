@@ -75,17 +75,32 @@ export const UNITS = {
 
 // Structures. Footprint is w x h tiles. `produces` lists unit keys.
 export const BUILDINGS = {
-  hq: { name: 'Command Center', w: 3, h: 3, hp: 3000, sight: 9, cost: 0, buildTime: 0, produces: ['truck', 'drone'], dropoff: true, buildable: false },
+  hq: { name: 'Command Center', w: 3, h: 3, hp: 3000, sight: 9, cost: 0, repairValue: 3000, healsInfantry: true, buildTime: 0, produces: ['truck', 'drone'], dropoff: true, buildable: false },
   refinery: { name: 'Supply Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 900, buildTime: 12, dropoff: true, requires: ['hq'] },
-  barracks: { name: 'Barracks', w: 2, h: 2, hp: 900, sight: 5, cost: 500, buildTime: 10, produces: ['infantry', 'rocketeer'], requires: ['hq'] },
+  barracks: { name: 'Barracks', w: 2, h: 2, hp: 900, sight: 5, cost: 500, buildTime: 10, produces: ['infantry', 'rocketeer'], requires: ['hq'], healsInfantry: true },
   factory: { name: 'Vehicle Plant', w: 3, h: 3, hp: 1500, sight: 5, cost: 1500, buildTime: 18, produces: ['scout', 'tank', 'aa', 'artillery', 'truck'], requires: ['barracks'] },
-  airfield: { name: 'Airbase', w: 3, h: 3, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber'], requires: ['factory'] },
-  shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'destroyer'], requires: ['barracks'], coastal: true },
+  airfield: { name: 'Airbase', w: 3, h: 3, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber'], requires: ['factory'], repairs: 'air' },
+  shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'destroyer'], requires: ['barracks'], coastal: true, repairs: 'naval' },
+  depot: { name: 'Service Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 800, buildTime: 12, requires: ['factory'], repairs: 'ground' },
   turret: { name: 'Gun Turret', w: 1, h: 1, hp: 700, sight: 7, cost: 600, buildTime: 8, weapon: 'turret_gun', requires: ['barracks'] },
   samsite: { name: 'SAM Site', w: 1, h: 1, hp: 600, sight: 9, cost: 750, buildTime: 9, weapon: 'sam', requires: ['factory'] },
 };
 
-export const BUILD_ORDER_MENU = ['refinery', 'barracks', 'factory', 'shipyard', 'airfield', 'turret', 'samsite'];
+export const BUILD_ORDER_MENU = ['refinery', 'barracks', 'factory', 'depot', 'shipyard', 'airfield', 'turret', 'samsite'];
+
+// Repair rules. Rates are fractions of max HP per second; costs are the
+// share of an item's price paid for a full 0-to-100% repair.
+export const REPAIR = {
+  buildingRate: 0.04, // toggled structure repair: ~25s from empty to full
+  buildingCost: 0.5,
+  unitRate: 0.08, // vehicles at a Service Depot, aircraft at an Airbase, ships at a Naval Yard
+  unitCost: 0.4,
+  facilityRange: 2, // tiles from the repair structure's edge
+  infantryRate: 0.03, // free healing near a Barracks or Command Center
+  infantryRange: 4,
+  underFire: 0.5, // repair speed multiplier while recently hit
+  underFireWindow: 3, // seconds after a hit that count as "under fire"
+};
 
 // Structures may only be placed within this many tiles of an existing friendly structure.
 export const BUILD_RADIUS = 8;
