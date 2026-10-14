@@ -16,6 +16,8 @@ import { Particles } from './particles.js';
 patchFow(materials.body, { clouds: true });
 
 export const CAMERA = { minDist: 7, maxDist: 58, defaultDist: 22 };
+const DECAL_LIFE = 30; // seconds a scorch mark stays on the ground
+const DECAL_FADE = 8; // seconds spent fading out at the end
 const SUN_DIR = new THREE.Vector3(-0.55, 1.0, -0.42).normalize();
 const AIR_ALT = { heli: 1.9, fighter: 2.9, bomber: 3.2 };
 // Units are drawn larger than their footprint so they read at strategy zoom.
@@ -34,6 +36,7 @@ export class Renderer3D {
     this.floaters = [];
     this.markers = [];
     this.decals = [];
+    this.decalPool = [];
 
     const high = quality === 'high';
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !high, powerPreference: 'high-performance' });
@@ -343,17 +346,35 @@ export class Renderer3D {
   }
 
   addDecal(x, y, size) {
-    let d = this.decals.length >= 80 ? this.decals.shift() : null;
+    let d = this.decals.length >= 80 ? this.decals.shift() : this.decalPool.pop();
     if (!d) {
-      d = { mesh: new THREE.Mesh(this.decalGeo, new THREE.MeshBasicMaterial({ map: this.decalTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 })) };
+      const mat = patchFow(new THREE.MeshBasicMaterial({ map: this.decalTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }), { clouds: false });
+      d = { mesh: new THREE.Mesh(this.decalGeo, mat) };
       d.mesh.renderOrder = 1;
       this.scene.add(d.mesh);
     }
-    d.life = 30;
+    d.life = DECAL_LIFE;
+    d.mesh.visible = true;
+    d.mesh.material.opacity = 1;
     d.mesh.position.set(x, this.hf.groundAt(x, y) + 0.03, y);
     d.mesh.rotation.y = Math.random() * 6.28;
     d.mesh.scale.setScalar(size);
     this.decals.push(d);
+  }
+
+  // Fade scorch marks out, then recycle them. Opacity must stay within
+  // [0, 1]: a negative alpha brightens the ground instead of darkening it.
+  updateDecals(dt) {
+    this.decals = this.decals.filter((d) => {
+      d.life -= dt;
+      if (d.life <= 0) {
+        d.mesh.visible = false;
+        this.decalPool.push(d);
+        return false;
+      }
+      d.mesh.material.opacity = Math.min(1, d.life / DECAL_FADE);
+      return true;
+    });
   }
 
   // ------------------------------------------------------------- frame
@@ -369,10 +390,7 @@ export class Renderer3D {
     this.updateWells(dt);
     this.updateProjectiles();
     this.particles.update(dt);
-    for (const d of this.decals) {
-      d.life -= dt;
-      d.mesh.material.opacity = Math.min(1, d.life / 8);
-    }
+    this.updateDecals(dt);
     this.updateSelection(ui, dt);
     this.updatePlacement(ui);
 
