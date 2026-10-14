@@ -5,10 +5,13 @@ A modern, browser-based 3D real-time strategy game inspired by *Real War*
 fog of war and a computer opponent, presented as a tilted 3D diorama in the
 style of modern 4X games.
 
-Visuals: height-mapped terrain with hills and mountains, animated water,
-instanced forests, procedurally modelled units and structures in team colours,
-real-time sun shadows, ambient occlusion, bloom, tilt-shift depth of field,
-drifting cloud shadows, and unexplored land hidden under cloud.
+Visuals: height-mapped terrain with hills and mountains, painted with
+procedurally generated grass, dirt, rock and sand textures; dirt roads and
+worn earth around structures and craters; mixed forests with autumn stands;
+farmsteads and windmills; animated water; units in desert-tan or olive-drab
+camouflage with small team markings; real-time sun shadows, ambient
+occlusion, drifting cloud shadows, and unexplored land hidden under cloud.
+All art is generated in code; there are no image or model files.
 
 > Working title. "Real War" is a trademark of its original publisher; all art,
 > sound, faction names and code here are original. Pick a new name before any
@@ -71,8 +74,9 @@ ambient occlusion, bloom and tilt-shift).
 | `src/sim.js` | Deterministic fixed-step simulation (20 ticks/s) and the command API |
 | `src/ai.js` | Computer opponent; uses the same commands as the player |
 | `src/gfx/heightfield.js` | Cosmetic terrain relief derived from the tile map (no three.js; tested) |
-| `src/gfx/world.js` | Terrain mesh, water, vegetation, sky and the fog-of-war shader patch |
-| `src/gfx/models.js` | Procedural low-poly unit/structure models (merged per model, team coloured) |
+| `src/gfx/textures.js` | Procedural, tiling ground textures (grass, dirt, rock, sand) |
+| `src/gfx/world.js` | Splat-textured terrain, water, vegetation, sky and the fog-of-war shader patch |
+| `src/gfx/models.js` | Procedural unit, structure and scenery models; camouflage shader |
 | `src/gfx/particles.js` | Point-sprite particles: explosions, smoke, fire, dust, wakes, tracers |
 | `src/gfx/renderer3d.js` | Scene, camera, lighting, post-processing, picking, overlays, minimap, icons |
 | `src/audio.js` | Procedurally synthesized sound effects (WebAudio) |
