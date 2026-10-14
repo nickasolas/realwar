@@ -76,7 +76,9 @@ ambient occlusion, bloom and tilt-shift).
 | `src/gfx/heightfield.js` | Cosmetic terrain relief derived from the tile map (no three.js; tested) |
 | `src/gfx/textures.js` | Procedural, tiling ground textures (grass, dirt, rock, sand) |
 | `src/gfx/world.js` | Splat-textured terrain, water, vegetation, sky and the fog-of-war shader patch |
-| `src/gfx/models.js` | Procedural unit, structure and scenery models; camouflage shader |
+| `src/gfx/modelkit.js` | Model toolkit: surface shader (camo paint, concrete, corrugated metal, canvas, track links, glass), geometry helpers |
+| `src/gfx/units.js` | Unit models: tracked armour, wheeled vehicles, infantry, aircraft, ships |
+| `src/gfx/structures.js` | Structure, scenery and oil-well models |
 | `src/gfx/particles.js` | Point-sprite particles: explosions, smoke, fire, dust, wakes, tracers |
 | `src/gfx/renderer3d.js` | Scene, camera, lighting, post-processing, picking, overlays, minimap, icons |
 | `src/audio.js` | Procedurally synthesized sound effects (WebAudio) |

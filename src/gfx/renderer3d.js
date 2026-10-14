@@ -551,7 +551,6 @@ export class Renderer3D {
         const back = new THREE.Vector3(-e.radius * 1.1, 0, (Math.random() - 0.5) * 0.4).applyEuler(r.rotation).add(r.position);
         P.smoke.spawn({ x: back.x, y: 0.05, z: back.z, vx: (Math.random() - 0.5) * 0.3, vy: 0.05, vz: (Math.random() - 0.5) * 0.3, life: 1.6, size: 0.15, size1: 0.6, drag: 0.5, color: [0.95, 0.97, 1, 0.55], color1: [0.9, 0.95, 1, 0] });
       }
-      if (v.parts.radar) v.parts.radar.rotation.y += dt * 2;
     } else {
       const h = this.hf.groundAt(x, z);
       const bob = e.def.armor === 'infantry' && speed > 0.2 ? Math.abs(Math.sin(this.time * 12 + e.id)) * 0.03 : 0;
@@ -566,6 +565,7 @@ export class Renderer3D {
       if (speed > 0.8 && e.def.armor !== 'infantry' && Math.random() < dt * 8) P.dust(x - ca * e.radius, h + 0.05, z - sa * e.radius, 1, 0.18);
     }
 
+    if (v.parts.radar) v.parts.radar.rotation.y += dt * 2;
     if (v.parts.turret) {
       const t = e.target != null ? this.game.get(e.target) : null;
       const want = t ? -(Math.atan2(t.y - e.y, t.x - e.x) - ang) : 0;
