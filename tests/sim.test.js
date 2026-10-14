@@ -111,3 +111,40 @@ test('AI builds up a base and army on its own', () => {
     assert.ok(mine.some((e) => e.kind === 'unit' && e.def.weapon), `AI ${owner} has an army`);
   }
 });
+
+test('recon drone: built at HQ, flies over water, sees far, cannot attack', () => {
+  const g = new Game({ seed: 3 });
+  const hq = find(g, 0, 'hq');
+  assert.ok(BUILDINGS.hq.produces.includes('drone'));
+  assert.ok(g.cmdQueue(0, hq.id, 'drone'));
+  run(g, UNITS.drone.buildTime + 0.5);
+  const drone = find(g, 0, 'drone');
+  assert.ok(drone, 'drone was produced');
+  assert.ok(UNITS.drone.sight > Math.max(...Object.values(UNITS).filter((u) => !u.scout).map((u) => u.sight)), 'best sight in the game');
+
+  // It reveals tiles at the edge of its sight radius.
+  const { w } = g.map;
+  const tx = Math.floor(drone.x + UNITS.drone.sight - 1), ty = Math.floor(drone.y);
+  g.updateFog();
+  assert.equal(g.players[0].visible[ty * w + tx], 1);
+
+  // It can't be ordered to attack, and never auto-targets anything.
+  const foe = g.addUnit(1, 'infantry', drone.x + 2, drone.y);
+  g.updateFog();
+  g.cmdAttack(0, [drone.id], foe.id);
+  assert.notEqual(drone.order.type, 'attack');
+  let droneShots = 0;
+  for (let i = 0; i < 3 * TICK_RATE; i++) {
+    g.step();
+    droneShots += g.events.filter((ev) => ev.type === 'fire' && ev.shooterId === drone.id).length;
+    g.events.length = 0;
+  }
+  assert.equal(droneShots, 0);
+
+  // Air units path straight across water.
+  const water = [];
+  for (let y = 0; y < g.map.h && !water.length; y++) for (let x = 0; x < w; x++) if (g.map.isWater(x, y)) { water.push({ x, y }); break; }
+  g.cmdMove(0, [drone.id], water[0].x + 0.5, water[0].y + 0.5);
+  run(g, 60);
+  assert.ok(Math.hypot(drone.x - water[0].x - 0.5, drone.y - water[0].y - 0.5) < 1.5, 'drone reached a water tile');
+});

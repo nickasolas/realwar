@@ -239,6 +239,31 @@ export function buildUnit(type, owner) {
       parts.tailRotor.position.set(-0.82, 0.1, 0.03);
       root.add(parts.rotor, parts.blur, parts.tailRotor);
       break;
+    case 'drone': {
+      // Quadcopter with a camera gimbal; the four rotors spin separately.
+      const arms = [[0.22, 0.22], [0.22, -0.22], [-0.22, 0.22], [-0.22, -0.22]];
+      root = cached(key, team, (p) => {
+        p.box(0.26, 0.07, 0.16, 'body', { y: 0.02 });
+        p.box(0.2, 0.02, 0.17, 'team', { y: 0.065 });
+        p.sphere(0.055, '#1c1c1c', { x: 0.1, y: -0.05 }, 10, 8);
+        p.sphere(0.03, '#2f6fa8', { x: 0.145, y: -0.05 }, 8, 6);
+        for (const [x, z] of arms) {
+          p.box(Math.hypot(x, z) * 1.05, 0.025, 0.035, '#2b2d28', { x: x / 2, y: 0.03, z: z / 2, ry: -Math.atan2(z, x) });
+          p.cyl(0.03, 0.03, 0.05, '#333', { x, y: 0.05, z }, 8);
+          for (const s of [-1, 1]) p.box(0.012, 0.09, 0.012, '#222', { x: x * 0.5, y: -0.05, z: z * 0.5 + s * 0.01 });
+        }
+        p.light(0.018, '#3cff6a', { x: 0.13, y: 0.03, z: 0.08 });
+        p.light(0.018, '#ff3030', { x: 0.13, y: 0.03, z: -0.08 });
+      });
+      parts.rotors = arms.map(([x, z], i) => {
+        const r = cached(key + ':r', team, (p) => { p.box(0.22, 0.008, 0.03, '#151515', {}); });
+        r.position.set(x, 0.085, z);
+        r.rotation.y = i * 0.7;
+        root.add(r);
+        return r;
+      });
+      break;
+    }
     case 'fighter':
       root = cached(key, team, (p) => {
         p.cyl(0.07, 0.09, 0.9, 'body', { x: -0.05, rz: Math.PI / 2 }, 10);

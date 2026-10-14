@@ -425,7 +425,8 @@ function refreshSidebar(force = false) {
       }
       const afford = p.credits >= def.cost;
       const weapon = def.weapon ? WEAPONS[def.weapon] : null;
-      const tip = `${def.name} — $${def.cost}\nHP ${def.hp} · Speed ${def.speed}${weapon ? `\nTargets: ${weapon.hits.join(', ')}` : ''}\nLeft-click: queue · Right-click: cancel`;
+      const role = weapon ? `\nTargets: ${weapon.hits.join(', ')}` : def.scout ? '\nUnarmed scout' : '';
+      const tip = `${def.name} — $${def.cost}\nHP ${def.hp} · Speed ${def.speed} · Sight ${def.sight}${role}\nLeft-click: queue · Right-click: cancel`;
       html += `<button class="btn${afford ? '' : ' poor'}" data-unit="${utype}" data-producer="${btype}" title="${tip}">
         <img class="icon" src="${renderer.iconFor('unit', utype)}" alt=""><span class="name">${def.name}</span><span class="cost">$${def.cost}</span>
         ${queued ? `<span class="badge">${queued}</span>` : ''}
@@ -450,6 +451,7 @@ function refreshSidebar(force = false) {
       const w = e.def.weapon ? WEAPONS[e.def.weapon] : null;
       detail += `<div>Status: ${describeOrder(e)}</div>`;
       if (w) detail += `<div>Weapon range ${w.range} · hits ${w.hits.join('/')}</div>`;
+      else if (e.def.scout) detail += `<div>Unarmed scout · sight ${e.def.sight}</div>`;
       if (e.def.harvester) detail += `<div>Cargo: ${Math.round(e.cargo)} / 150</div>`;
     } else {
       if (e.progress < 1) detail += `<div>Under construction: ${Math.round(e.progress * 100)}%</div>`;

@@ -50,6 +50,25 @@ export class AIController {
     this.manageConstruction();
     this.manageProduction();
     this.manageArmy();
+    this.manageScouting();
+  }
+
+  // Keep one recon drone flying between oil fields and the enemy base.
+  manageScouting() {
+    const g = this.game;
+    const drones = this.mine((e) => e.kind === 'unit' && e.def.scout);
+    const hq = this.mine((e) => e.type === 'hq' && e.progress >= 1)[0];
+    const trucks = this.mine((e) => e.kind === 'unit' && e.def.harvester).length;
+    const queued = hq?.queue.some((q) => UNITS[q.type].scout);
+    if (!drones.length && hq && !queued && trucks >= 2 && this.player.credits >= UNITS.drone.cost + 300) {
+      g.cmdQueue(this.id, hq.id, 'drone');
+    }
+    for (const d of drones) {
+      if (d.order.type !== 'idle') continue;
+      const spots = [g.map.starts[1 - this.id], ...g.map.wells];
+      const s = g.rng.pick(spots);
+      g.cmdMove(this.id, [d.id], s.x + 0.5, s.y + 0.5);
+    }
   }
 
   manageEconomy() {
@@ -144,7 +163,7 @@ export class AIController {
 
   manageArmy() {
     const g = this.game;
-    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester);
+    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester && !e.def.scout);
     const hq = this.mine((e) => e.type === 'hq')[0] || this.mine((e) => e.kind === 'building')[0];
 
     // Defend: if enemies are near our base, everyone idle responds.

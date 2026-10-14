@@ -64,6 +64,8 @@ export const UNITS = {
   tank: { name: 'Battle Tank', domain: 'ground', armor: 'heavy', hp: 520, speed: 2.1, sight: 6, cost: 900, buildTime: 12, radius: 0.5, weapon: 'cannon_heavy' },
   artillery: { name: 'Howitzer', domain: 'ground', armor: 'light', hp: 220, speed: 1.5, sight: 7, cost: 1000, buildTime: 14, radius: 0.5, weapon: 'howitzer' },
   aa: { name: 'Flak Track', domain: 'ground', armor: 'light', hp: 260, speed: 2.4, sight: 8, cost: 700, buildTime: 10, radius: 0.45, weapon: 'flak' },
+  // Unarmed scout: fast, fragile, and sees further than anything else.
+  drone: { name: 'Recon Drone', domain: 'air', armor: 'air', hp: 90, speed: 5.5, sight: 14, cost: 450, buildTime: 8, radius: 0.35, scout: true },
   heli: { name: 'Attack Helicopter', domain: 'air', armor: 'air', hp: 280, speed: 4.0, sight: 8, cost: 1200, buildTime: 14, radius: 0.5, weapon: 'heli_missile' },
   fighter: { name: 'Interceptor', domain: 'air', armor: 'air', hp: 240, speed: 7.0, sight: 9, cost: 1100, buildTime: 13, radius: 0.5, weapon: 'aam' },
   bomber: { name: 'Strike Bomber', domain: 'air', armor: 'air', hp: 420, speed: 4.6, sight: 7, cost: 1800, buildTime: 20, radius: 0.7, weapon: 'bomb' },
@@ -73,7 +75,7 @@ export const UNITS = {
 
 // Structures. Footprint is w x h tiles. `produces` lists unit keys.
 export const BUILDINGS = {
-  hq: { name: 'Command Center', w: 3, h: 3, hp: 3000, sight: 9, cost: 0, buildTime: 0, produces: ['truck'], dropoff: true, buildable: false },
+  hq: { name: 'Command Center', w: 3, h: 3, hp: 3000, sight: 9, cost: 0, buildTime: 0, produces: ['truck', 'drone'], dropoff: true, buildable: false },
   refinery: { name: 'Supply Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 900, buildTime: 12, dropoff: true, requires: ['hq'] },
   barracks: { name: 'Barracks', w: 2, h: 2, hp: 900, sight: 5, cost: 500, buildTime: 10, produces: ['infantry', 'rocketeer'], requires: ['hq'] },
   factory: { name: 'Vehicle Plant', w: 3, h: 3, hp: 1500, sight: 5, cost: 1500, buildTime: 18, produces: ['scout', 'tank', 'aa', 'artillery', 'truck'], requires: ['barracks'] },

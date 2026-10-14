@@ -31,7 +31,7 @@ npm start            # http://localhost:8080
 - **Base building:** Structures are placed from the sidebar within range of your
   base, one at a time. Tech tree: Command Center → Barracks → Vehicle Plant →
   Airbase; Barracks → Naval Yard (shoreline only); plus Gun Turrets and SAM Sites.
-- **Units:** Rifle Squads, Rocket Teams, Scout Buggies, Battle Tanks, Flak
+- **Units:** Recon Drones (unarmed, long-sight scouts from the Command Center), Rifle Squads, Rocket Teams, Scout Buggies, Battle Tanks, Flak
   Tracks, Howitzers, Attack Helicopters, Interceptors, Strike Bombers, Patrol
   Boats and Missile Cruisers. Weapons only hit certain domains (ground/naval/air)
   and deal different damage per armor class, so army composition counts.

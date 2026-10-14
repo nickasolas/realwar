@@ -19,9 +19,9 @@ export const CAMERA = { minDist: 7, maxDist: 58, defaultDist: 22 };
 const DECAL_LIFE = 30; // seconds a scorch mark stays on the ground
 const DECAL_FADE = 8; // seconds spent fading out at the end
 const SUN_DIR = new THREE.Vector3(-0.55, 1.0, -0.42).normalize();
-const AIR_ALT = { heli: 1.9, fighter: 2.9, bomber: 3.2 };
+const AIR_ALT = { drone: 3.4, heli: 1.9, fighter: 2.9, bomber: 3.2 };
 // Units are drawn larger than their footprint so they read at strategy zoom.
-const UNIT_SCALE = { infantry: 1.6, rocketeer: 1.6, truck: 1.3, scout: 1.35, tank: 1.3, aa: 1.3, artillery: 1.25, heli: 1.3, fighter: 1.15, bomber: 0.95, gunboat: 1.25, destroyer: 1.2 };
+const UNIT_SCALE = { drone: 1.6, infantry: 1.6, rocketeer: 1.6, truck: 1.3, scout: 1.35, tank: 1.3, aa: 1.3, artillery: 1.25, heli: 1.3, fighter: 1.15, bomber: 0.95, gunboat: 1.25, destroyer: 1.2 };
 
 export class Renderer3D {
   constructor(canvas, overlay, game, viewer = 0, quality = 'high') {
@@ -119,6 +119,8 @@ export class Renderer3D {
     this.selMat = new THREE.MeshBasicMaterial({ color: '#7dff8a', transparent: true, opacity: 0.9, depthTest: false });
     this.enemySelMat = new THREE.MeshBasicMaterial({ color: '#ff6a5f', transparent: true, opacity: 0.9, depthTest: false });
     this.ringPool = [];
+    this.visionGeo = new THREE.RingGeometry(0.985, 1, 96).rotateX(-Math.PI / 2);
+    this.visionMat = new THREE.MeshBasicMaterial({ color: '#9fd8ff', transparent: true, opacity: 0.35, depthTest: false });
     this.markerPool = [];
 
     this.ghost = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: '#5f5', transparent: true, opacity: 0.35, depthWrite: false }));
@@ -499,7 +501,11 @@ export class Renderer3D {
         v.parts.rotor.rotation.y += dt * 28;
         v.parts.tailRotor.rotation.z += dt * 40;
       }
-      if (e.type !== 'heli' && speed > 0.5 && Math.random() < dt * 20) {
+      if (v.parts.rotors) {
+        v.parts.rotors.forEach((rt, i) => { rt.rotation.y += dt * (i % 2 ? -45 : 45); });
+        v.body.rotation.z = -Math.min(0.3, speed * 0.05);
+      }
+      if (e.type !== 'heli' && !e.def.scout && speed > 0.5 && Math.random() < dt * 20) {
         const back = new THREE.Vector3(-0.55, 0, 0).applyEuler(r.rotation).add(r.position);
         P.trail(back.x, back.y, back.z);
       }
@@ -588,6 +594,12 @@ export class Renderer3D {
         const gy = e.def.domain === 'air' ? this.hf.groundAt(v.root.position.x, v.root.position.z) : e.def.domain === 'naval' ? WATER_LEVEL : v.root.position.y;
         m.position.set(v.root.position.x, gy + 0.04, v.root.position.z);
         m.scale.setScalar(e.radius * 0.95 + 0.15);
+        // Scouts also show how far they can see.
+        if (e.def.scout && e.owner === this.viewer) {
+          const vr = take(this.visionGeo, this.visionMat);
+          vr.position.set(v.root.position.x, Math.max(WATER_LEVEL, gy) + 0.05, v.root.position.z);
+          vr.scale.setScalar(e.def.sight);
+        }
       }
     }
     for (let i = n; i < this.ringPool.length; i++) this.ringPool[i].visible = false;
