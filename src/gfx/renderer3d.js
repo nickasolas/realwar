@@ -92,6 +92,8 @@ export class Renderer3D {
     this.water = buildWater(game.map);
     this.vegetation = buildVegetation(game.map, this.hf, game.seed);
     this.scene.add(this.terrain, this.water, this.vegetation);
+    // Keep the ground around each well clear for the trucks' loading bays.
+    for (const w of game.map.wells) this.vegetation.userData.clear(w.x - 1, w.y - 1, 3, 3);
     this.wells = game.map.wells.map((w) => {
       const v = buildWell();
       v.root.position.set(w.x + 0.5, this.hf.heightAt(w.x + 0.5, w.y + 0.5), w.y + 0.5);

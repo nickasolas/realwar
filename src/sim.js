@@ -11,6 +11,10 @@ const MAX_QUEUE = 5;
 const FOG_INTERVAL = 4; // ticks between visibility refreshes
 const REPAIR_INTERVAL = 5; // ticks between repair updates
 const PATHS_PER_TICK = 4; // group orders path at most this many units per tick
+// Each well has loading bays on opposite sides of the pumpjack.
+const WELL_BAYS = 3;
+const BAY_OFFSETS = [[0.8, 0], [-0.8, 0], [0, 0.8], [0, -0.8]];
+const BUSY_WELL_PENALTY = 7; // tiles of extra travel a truck accepts per truck ahead of it
 
 export function damageAgainst(weapon, armor) {
   return weapon.damage * (weapon.vs?.[armor] ?? 1);
@@ -59,7 +63,7 @@ export class Game {
     this.addUnit(player.id, 'infantry', s.x - 1 * dir + 0.5, s.y + 3.5);
     this.addUnit(player.id, 'scout', s.x + 0.5, s.y + 3.5);
     hq.rally = null;
-    this.cmdHarvest(player.id, [truck.id], this.nearestWell(truck));
+    this.cmdHarvest(player.id, [truck.id], this.chooseWell(truck));
   }
 
   addUnit(owner, type, x, y) {
@@ -207,6 +211,7 @@ export class Game {
     for (const u of units) {
       u.order = { type: 'harvest' };
       u.pendingPath = null;
+      this.releaseBay(u);
       u.well = wellIndex;
       u.harvestState = u.cargo >= TRUCK_CAPACITY ? 'toDropoff' : 'toWell';
       u.path = null;
@@ -441,6 +446,7 @@ export class Game {
   }
 
   nudge(u, dx, dy) {
+    if (u.harvestState === 'loading' && u.order.type === 'harvest') return;
     const nx = u.x + dx, ny = u.y + dy;
     if (this.map.passable(Math.floor(nx), Math.floor(ny), u.def.domain, u.owner)) { u.x = nx; u.y = ny; }
   }
@@ -661,6 +667,61 @@ export class Game {
     return best;
   }
 
+  // Loading bay positions for a well: the first WELL_BAYS sides that a
+  // ground vehicle can stand on.
+  wellBays(i) {
+    const w = this.map.wells[i];
+    const bays = [];
+    for (const [ox, oy] of BAY_OFFSETS) {
+      const x = w.x + 0.5 + ox, y = w.y + 0.5 + oy;
+      if (this.map.passable(Math.floor(x), Math.floor(y), 'ground')) bays.push({ x, y });
+      if (bays.length === WELL_BAYS) break;
+    }
+    return bays;
+  }
+
+  // Trucks currently holding a bay at well i, as [bayIndex] -> truck.
+  bayHolders(i) {
+    const holders = [];
+    for (const t of this.entities.values()) {
+      if (t.kind !== 'unit' || !t.def.harvester || t.well !== i || t.bay == null) continue;
+      if (t.order.type !== 'harvest' || (t.harvestState !== 'toWell' && t.harvestState !== 'loading')) continue;
+      holders[t.bay] = t;
+    }
+    return holders;
+  }
+
+  claimBay(u) {
+    if (u.bay != null) return true;
+    const holders = this.bayHolders(u.well);
+    const n = this.wellBays(u.well).length;
+    for (let b = 0; b < n; b++) if (!holders[b]) { u.bay = b; return true; }
+    return false;
+  }
+
+  releaseBay(u) { u.bay = null; }
+
+  // Pick a well by travel distance plus how busy it is, so trucks spread
+  // out instead of crowding one pump. A small bonus keeps them on their
+  // current well unless another is clearly better.
+  chooseWell(u) {
+    const demand = new Map();
+    for (const t of this.entities.values()) {
+      if (t === u || t.kind !== 'unit' || !t.def.harvester || t.order.type !== 'harvest') continue;
+      if (t.harvestState === 'toWell' || t.harvestState === 'loading') demand.set(t.well, (demand.get(t.well) || 0) + 1);
+    }
+    let best = -1, bestScore = Infinity;
+    this.map.wells.forEach((w, i) => {
+      if (w.amount <= 0 || (u.avoidWells?.[i] ?? 0) > this.tick) return;
+      const bays = this.wellBays(i).length;
+      if (!bays) return;
+      const queue = Math.max(0, (demand.get(i) || 0) - bays + 1);
+      const score = Math.hypot(w.x + 0.5 - u.x, w.y + 0.5 - u.y) + queue * BUSY_WELL_PENALTY + (i === u.well ? -1.5 : 0);
+      if (score < bestScore) { bestScore = score; best = i; }
+    });
+    return best;
+  }
+
   nearestDropoff(u) {
     let best = null, bestD = Infinity;
     for (const e of this.entities.values()) {
@@ -676,22 +737,41 @@ export class Game {
     switch (u.harvestState) {
       case 'toWell': {
         let well = this.map.wells[u.well];
-        if (!well || well.amount <= 0) {
-          u.well = this.nearestWell(u);
+        if (!well || well.amount <= 0 || !this.wellBays(u.well).length) {
+          this.releaseBay(u);
+          u.well = this.chooseWell(u);
           well = this.map.wells[u.well];
           if (!well) { u.order = { type: 'idle' }; return; }
         }
+        // Claim a loading bay; if the well is full, see whether another
+        // well is now the better bet before queueing here.
+        if (!this.claimBay(u)) {
+          const alt = this.chooseWell(u);
+          if (alt >= 0 && alt !== u.well) { u.well = alt; u.path = null; well = this.map.wells[alt]; this.claimBay(u); }
+        }
         const wx = well.x + 0.5, wy = well.y + 0.5;
-        const dist = Math.hypot(u.x - wx, u.y - wy);
-        if (dist < 0.9) { u.harvestState = 'loading'; u.path = null; u.wellStuck = 0; break; }
-        this.moveToward(u, wx, wy);
-        // Can't get near this well (e.g. it's inside enemy walls): try another
-        // for a minute. Trucks merely queueing beside a busy well are fine.
-        u.wellStuck = u.path && !u.path.length && dist > 2.5 ? (u.wellStuck || 0) + 1 : 0;
+        let tx, ty;
+        if (u.bay != null) {
+          const bay = this.wellBays(u.well)[u.bay];
+          tx = bay.x; ty = bay.y;
+        } else {
+          // Wait beside the well, out of the bays' way.
+          const d = Math.hypot(u.x - wx, u.y - wy) || 1;
+          tx = wx + ((u.x - wx) / d) * 2.2; ty = wy + ((u.y - wy) / d) * 2.2;
+        }
+        const dist = Math.hypot(u.x - tx, u.y - ty);
+        if (u.bay != null && dist < 0.3) { u.harvestState = 'loading'; u.path = null; u.wellStuck = 0; break; }
+        if (u.bay == null && dist < 0.6) { u.path = null; break; }
+        this.moveToward(u, tx, ty);
+        // Holding a bay but no route to it: the well is cut off (e.g. inside
+        // enemy walls), so try another for a minute. Trucks waiting for a
+        // bay have none and aren't counted.
+        u.wellStuck = u.bay != null && u.path && !u.path.length ? (u.wellStuck || 0) + 1 : 0;
         if (u.wellStuck > TICK_RATE * 3) {
           (u.avoidWells ||= {})[u.well] = this.tick + TICK_RATE * 60;
           u.wellStuck = 0;
-          u.well = this.nearestWell(u);
+          this.releaseBay(u);
+          u.well = this.chooseWell(u);
           u.path = null;
           if (u.well < 0) u.order = { type: 'idle' };
         }
@@ -699,26 +779,34 @@ export class Game {
       }
       case 'loading': {
         const well = this.map.wells[u.well];
-        if (!well || well.amount <= 0) { u.harvestState = u.cargo > 0 ? 'toDropoff' : 'toWell'; break; }
+        if (!well || well.amount <= 0) { this.releaseBay(u); u.harvestState = u.cargo > 0 ? 'toDropoff' : 'toWell'; break; }
+        turnToward(u, Math.atan2(well.y + 0.5 - u.y, well.x + 0.5 - u.x) + Math.PI / 2, 4);
         const amt = Math.min(HARVEST_RATE * DT, well.amount, TRUCK_CAPACITY - u.cargo);
         well.amount -= amt;
         u.cargo += amt;
-        if (u.cargo >= TRUCK_CAPACITY - 0.001) u.harvestState = 'toDropoff';
+        if (u.cargo >= TRUCK_CAPACITY - 0.001) { this.releaseBay(u); u.harvestState = 'toDropoff'; }
         break;
       }
       case 'toDropoff': {
         const dep = this.nearestDropoff(u);
         if (!dep) { u.order = { type: 'idle' }; return; }
-        if (this.distTo(u, dep) < 0.8) {
+        if (this.distTo(u, dep) < 0.9) {
           const amt = Math.round(u.cargo);
           p.credits += amt;
           p.stats.harvested += amt;
           u.cargo = 0;
           u.harvestState = 'toWell';
+          // Re-pick each trip so trucks rebalance across wells.
+          const next = this.chooseWell(u);
+          if (next >= 0) u.well = next;
           this.events.push({ type: 'credits', x: u.x, y: u.y, amount: amt, owner: u.owner });
           u.path = null;
         } else {
-          this.moveToward(u, dep.x, dep.y);
+          // Head for the nearest point on the structure's edge rather than
+          // its centre, so trucks spread around it instead of converging.
+          const ex = Math.max(dep.tx - 0.5, Math.min(dep.tx + dep.w + 0.5, u.x));
+          const ey = Math.max(dep.ty - 0.5, Math.min(dep.ty + dep.h + 0.5, u.y));
+          this.moveToward(u, ex, ey);
         }
         break;
       }
@@ -764,7 +852,7 @@ export class Game {
     this.events.push({ type: 'unitReady', owner: b.owner, unit: type, x: u.x, y: u.y });
     if (b.rally) this.cmdMove(b.owner, [u.id], b.rally.x, b.rally.y);
     else if (def.harvester) {
-      const well = this.nearestWell(u);
+      const well = this.chooseWell(u);
       if (well >= 0) this.cmdHarvest(b.owner, [u.id], well);
     } else {
       // Step off the doorstep.

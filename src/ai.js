@@ -112,7 +112,7 @@ export class AIController {
     const trucks = this.mine((e) => e.kind === 'unit' && e.def.harvester);
     for (const t of trucks) {
       if (t.order.type === 'idle') {
-        const well = this.game.nearestWell(t);
+        const well = this.game.chooseWell(t);
         if (well >= 0) this.game.cmdHarvest(this.id, [t.id], well);
       }
     }

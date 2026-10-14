@@ -432,3 +432,37 @@ test('units cannot slip through a wall to reach an enclosed point', () => {
   run(g, 15);
   assert.ok(Math.hypot(tank.x - cx - 0.5, tank.y - cy - 0.5) > 1.2, `stayed outside (${tank.x.toFixed(2)}, ${tank.y.toFixed(2)})`);
 });
+
+test('trucks spread across wells and share a pump through loading bays', () => {
+  const g = new Game({ seed: 3 });
+  for (const e of [...g.entities.values()]) if (e.owner === 1 && e.kind === 'unit') g.entities.delete(e.id);
+  const hq = find(g, 0, 'hq');
+  const trucks = [...g.entities.values()].filter((e) => e.owner === 0 && e.type === 'truck');
+  while (trucks.length < 7) {
+    const t = g.addUnit(0, 'truck', hq.x + 2 + trucks.length * 0.5, hq.y + 2.5);
+    g.cmdHarvest(0, [t.id], g.chooseWell(t));
+    trucks.push(t);
+  }
+  let maxLoading = 0, maxPerWell = 0;
+  for (let i = 0; i < 20 * 90; i++) {
+    g.step(); g.events.length = 0;
+    const loading = {}, assigned = {};
+    for (const t of trucks) {
+      if (t.harvestState === 'loading') loading[t.well] = (loading[t.well] || 0) + 1;
+      if (t.harvestState === 'toWell' || t.harvestState === 'loading') assigned[t.well] = (assigned[t.well] || 0) + 1;
+    }
+    maxLoading = Math.max(maxLoading, ...Object.values(loading), 0);
+    maxPerWell = Math.max(maxPerWell, ...Object.values(assigned), 0);
+    // Two trucks never hold the same bay.
+    const bays = new Set();
+    for (const t of trucks) {
+      if (t.bay == null || t.harvestState === 'toDropoff') continue;
+      const key = t.well + ':' + t.bay;
+      assert.ok(!bays.has(key), 'bay shared');
+      bays.add(key);
+    }
+  }
+  assert.ok(maxLoading <= 3, `at most three trucks pump one well (${maxLoading})`);
+  assert.ok(maxPerWell < trucks.length, `trucks spread over more than one well (worst ${maxPerWell})`);
+  assert.ok(g.players[0].stats.harvested > 3000, 'income keeps flowing');
+});
