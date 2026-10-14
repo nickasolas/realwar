@@ -115,7 +115,7 @@ export class Renderer3D {
   buildOverlayObjects() {
     // Pools of ground-hugging rings for selection and order markers.
     this.ringGeo = new THREE.RingGeometry(0.88, 1, 40).rotateX(-Math.PI / 2);
-    this.squareGeo = new THREE.RingGeometry(0.9, 1, 4, 1, Math.PI / 4).rotateX(-Math.PI / 2);
+    this.frameGeos = new Map();
     this.selMat = new THREE.MeshBasicMaterial({ color: '#7dff8a', transparent: true, opacity: 0.9, depthTest: false });
     this.enemySelMat = new THREE.MeshBasicMaterial({ color: '#ff6a5f', transparent: true, opacity: 0.9, depthTest: false });
     this.ringPool = [];
@@ -145,6 +145,21 @@ export class Renderer3D {
     ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
     this.decalTex = new THREE.CanvasTexture(c);
     this.decalGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  }
+
+  // Flat rectangular outline hugging a w x h footprint, even line width.
+  frameGeo(w, h) {
+    const key = w + 'x' + h;
+    let g = this.frameGeos.get(key);
+    if (!g) {
+      const m = 0.12, t = 0.08;
+      const ox = w / 2 + m, oy = h / 2 + m, ix = ox - t, iy = oy - t;
+      const shape = new THREE.Shape([new THREE.Vector2(-ox, -oy), new THREE.Vector2(ox, -oy), new THREE.Vector2(ox, oy), new THREE.Vector2(-ox, oy)]);
+      shape.holes.push(new THREE.Path([new THREE.Vector2(-ix, -iy), new THREE.Vector2(-ix, iy), new THREE.Vector2(ix, iy), new THREE.Vector2(ix, -iy)]));
+      g = new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2);
+      this.frameGeos.set(key, g);
+    }
+    return g;
   }
 
   // ------------------------------------------------------------ camera
@@ -617,9 +632,9 @@ export class Renderer3D {
       if (!e || !v || !v.root.visible) continue;
       const mat = e.owner === this.viewer ? this.selMat : this.enemySelMat;
       if (e.kind === 'building') {
-        const m = take(this.squareGeo, mat);
+        const m = take(this.frameGeo(e.w, e.h), mat);
         m.position.set(e.x, v.root.position.y + 0.14, e.y);
-        m.scale.set(e.w * 0.75, 1, e.h * 0.75);
+        m.scale.setScalar(1);
       } else {
         const m = take(this.ringGeo, mat);
         const gy = e.def.domain === 'air' ? this.hf.groundAt(v.root.position.x, v.root.position.z) : e.def.domain === 'naval' ? WATER_LEVEL : v.root.position.y;

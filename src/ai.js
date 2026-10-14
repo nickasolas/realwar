@@ -143,15 +143,25 @@ export class AIController {
     if (!hq) return null;
     const enemyStart = g.map.starts[1 - this.id] || g.map.starts[0];
     const towardEnemy = Math.atan2(enemyStart.y - hq.y, enemyStart.x - hq.x);
+    // Big or coastal footprints need a wider search; sample every tile of each ring.
+    const maxR = def.coastal || def.w * def.h > 9 ? 16 : 9;
+    // Prefer sites with a one-tile lane all round; accept a tight fit rather than none.
+    return this.searchSpot(type, hq, towardEnemy, maxR, true) || this.searchSpot(type, hq, towardEnemy, maxR, false);
+  }
+
+  searchSpot(type, hq, towardEnemy, maxR, needClearance) {
+    const g = this.game;
+    const def = BUILDINGS[type];
     let best = null, bestScore = Infinity;
-    for (let r = 2; r <= (def.coastal ? 16 : 9); r++) {
-      for (let a = 0; a < 24; a++) {
-        const ang = (a / 24) * Math.PI * 2;
+    for (let r = 2; r <= maxR; r++) {
+      const steps = Math.max(24, Math.ceil(Math.PI * 2 * r));
+      for (let a = 0; a < steps; a++) {
+        const ang = (a / steps) * Math.PI * 2;
         const x = Math.round(hq.x + Math.cos(ang) * r - def.w / 2);
         const y = Math.round(hq.y + Math.sin(ang) * r - def.h / 2);
         if (!g.canPlace(this.id, type, x, y)) continue;
         // Leave a one-tile lane around every structure so units can get out.
-        if (!this.hasClearance(x, y, def.w, def.h)) continue;
+        if (needClearance && !this.hasClearance(x, y, def.w, def.h)) continue;
         let score = r;
         // Defenses face the enemy; production buildings stay behind.
         const facing = Math.cos(ang - towardEnemy);

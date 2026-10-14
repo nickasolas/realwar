@@ -441,27 +441,59 @@ export function buildStructure(type, owner, w, h) {
       parts.smoke = [new THREE.Vector3(1.15, 1.45, -1.0), new THREE.Vector3(0.85, 1.25, -1.1)];
       break;
     case 'airfield':
+      // Long east-west strip: runway along the south edge, hangars, tower
+      // and fuel along the north apron. Footprint is 6 x 2 tiles.
       root = cached(key, team, (p) => {
         slab(p, W, D);
-        p.box(3.0, 0.02, 0.8, '#3c3d3a', { y: 0.13, z: 0.6 });
-        for (let i = 0; i < 7; i++) p.box(0.22, 0.005, 0.04, '#e8e8e2', { x: -1.3 + i * 0.43, y: 0.142, z: 0.6 });
-        for (let i = 0; i < 8; i++) {
-          p.light(0.025, '#7fd0ff', { x: -1.4 + i * 0.4, y: 0.16, z: 0.22 });
-          p.light(0.025, '#7fd0ff', { x: -1.4 + i * 0.4, y: 0.16, z: 0.98 });
+        const L = W - 0.2;
+        // Runway with centre-line dashes, threshold stripes and edge lights.
+        p.box(L, 0.02, 0.86, '#353633', { y: 0.13, z: 0.46 });
+        for (let i = 0; i < 12; i++) p.box(0.24, 0.005, 0.035, '#e8e8e2', { x: -L / 2 + 0.55 + i * ((L - 1.1) / 11), y: 0.142, z: 0.46 });
+        for (const end of [-1, 1]) {
+          for (let k = 0; k < 6; k++) p.box(0.2, 0.005, 0.05, '#e8e8e2', { x: end * (L / 2 - 0.16), y: 0.142, z: 0.16 + k * 0.12 });
+          p.box(0.04, 0.005, 0.8, '#e8e8e2', { x: end * (L / 2 - 0.34), y: 0.142, z: 0.46 });
         }
-        // Hangar.
-        p.add(new THREE.CylinderGeometry(0.55, 0.55, 1.1, 18, 1, false, 0, Math.PI), '#8b8d86', { x: -0.7, y: 0.12, z: -0.65, rz: Math.PI / 2, ry: Math.PI / 2 });
-        p.box(1.1, 0.04, 0.08, 'team', { x: -0.7, y: 0.66, z: -0.65 });
-        p.box(0.02, 0.4, 0.7, '#2e302b', { x: -0.14, y: 0.32, z: -0.65 });
+        for (let i = 0; i <= 14; i++) {
+          const x = -L / 2 + (i * L) / 14;
+          p.light(0.022, '#7fd0ff', { x, y: 0.16, z: 0.05 });
+          p.light(0.022, '#7fd0ff', { x, y: 0.16, z: 0.87 });
+        }
+        for (const end of [-1, 1]) for (let k = 0; k < 4; k++) p.light(0.024, end < 0 ? '#5dff7a' : '#ff5a4f', { x: end * (L / 2 + 0.02), y: 0.16, z: 0.2 + k * 0.17 });
+        // Taxiway linking the apron to the runway.
+        p.box(3.9, 0.015, 0.22, '#55574f', { x: -0.6, y: 0.13, z: -0.12 });
+        p.box(0.22, 0.015, 0.3, '#55574f', { x: -2.4, y: 0.13, z: 0.05 });
+        p.box(0.22, 0.015, 0.3, '#55574f', { x: 1.2, y: 0.13, z: 0.05 });
+        for (let i = 0; i < 9; i++) p.box(0.16, 0.004, 0.02, '#e0b030', { x: -2.4 + i * 0.45, y: 0.14, z: -0.12 });
+        // Two arched hangars with doors facing the runway.
+        for (const x of [-2.25, -1.25]) {
+          p.add(new THREE.CylinderGeometry(0.4, 0.4, 0.66, 18, 1, false, 0, Math.PI), '#8b8d86', { x, y: 0.12, z: -0.6, rz: Math.PI / 2, ry: Math.PI / 2 });
+          p.box(0.06, 0.03, 0.68, 'team', { x, y: 0.53, z: -0.6 });
+          p.box(0.62, 0.32, 0.02, '#2e302b', { x, y: 0.28, z: -0.26 });
+          p.box(0.66, 0.03, 0.03, 'team', { x, y: 0.45, z: -0.26 });
+        }
         // Control tower.
-        p.cyl(0.12, 0.15, 0.9, '#bdb9aa', { x: 0.9, y: 0.55, z: -0.75 }, 10);
-        p.cyl(0.24, 0.2, 0.2, '#203646', { x: 0.9, y: 1.1, z: -0.75 }, 10);
-        p.cyl(0.26, 0.26, 0.04, 'team', { x: 0.9, y: 1.22, z: -0.75 }, 10);
-        p.light(0.035, '#ff3030', { x: 0.9, y: 1.3, z: -0.75 });
-        p.glowBox(0.3, 0.06, 0.3, '#9fd4ff', { x: 0.9, y: 1.1, z: -0.75 });
+        p.box(0.5, 0.3, 0.4, '#a9a596', { x: 0.25, y: 0.27, z: -0.66 });
+        windowsRow(p, 0.05, 0.45, 0.3, -0.455, 3);
+        p.cyl(0.1, 0.13, 0.75, '#bdb9aa', { x: 0.55, y: 0.5, z: -0.7 }, 10);
+        p.cyl(0.22, 0.18, 0.18, '#203646', { x: 0.55, y: 0.95, z: -0.7 }, 10);
+        p.glowBox(0.27, 0.05, 0.27, '#9fd4ff', { x: 0.55, y: 0.95, z: -0.7 });
+        p.cyl(0.24, 0.24, 0.04, 'team', { x: 0.55, y: 1.06, z: -0.7 }, 10);
+        p.light(0.032, '#ff3030', { x: 0.55, y: 1.13, z: -0.7 });
+        // Fuel farm.
+        for (const [x, z] of [[1.45, -0.72], [1.85, -0.72]]) {
+          p.cyl(0.16, 0.16, 0.3, '#d9d6cc', { x, y: 0.27, z }, 16);
+          p.cyl(0.165, 0.165, 0.04, 'team', { x, y: 0.33, z }, 16);
+        }
+        // Radar mast and windsock.
+        p.cyl(0.03, 0.04, 0.6, '#77756c', { x: 2.55, y: 0.42, z: -0.7 }, 6);
+        p.cyl(0.012, 0.012, 0.4, '#ddd', { x: 2.75, y: 0.32, z: -0.05 }, 4);
+        p.cone(0.04, 0.18, '#ff7a1a', { x: 2.84, y: 0.49, z: -0.05, rz: Math.PI / 2 }, 8);
       });
-      parts.dish = cached(key + ':d', team, (p) => { p.box(0.04, 0.08, 0.36, '#ddd', {}); });
-      parts.dish.position.set(0.9, 1.38, -0.75);
+      parts.dish = cached(key + ':d', team, (p) => {
+        p.cyl(0.18, 0.08, 0.05, '#e3e1d8', { rz: 1.1 }, 14);
+        p.box(0.04, 0.06, 0.04, '#555', { y: -0.04 });
+      });
+      parts.dish.position.set(2.55, 0.78, -0.7);
       root.add(parts.dish);
       break;
     case 'shipyard':

@@ -79,7 +79,7 @@ export const BUILDINGS = {
   refinery: { name: 'Supply Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 900, buildTime: 12, dropoff: true, requires: ['hq'] },
   barracks: { name: 'Barracks', w: 2, h: 2, hp: 900, sight: 5, cost: 500, buildTime: 10, produces: ['infantry', 'rocketeer'], requires: ['hq'], healsInfantry: true },
   factory: { name: 'Vehicle Plant', w: 3, h: 3, hp: 1500, sight: 5, cost: 1500, buildTime: 18, produces: ['scout', 'tank', 'aa', 'artillery', 'truck'], requires: ['barracks'] },
-  airfield: { name: 'Airbase', w: 3, h: 3, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber'], requires: ['factory'], repairs: 'air' },
+  airfield: { name: 'Airbase', w: 6, h: 2, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber'], requires: ['factory'], repairs: 'air' },
   shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'destroyer'], requires: ['barracks'], coastal: true, repairs: 'naval' },
   depot: { name: 'Service Depot', w: 2, h: 2, hp: 1000, sight: 5, cost: 800, buildTime: 12, requires: ['factory'], repairs: 'ground' },
   turret: { name: 'Gun Turret', w: 1, h: 1, hp: 700, sight: 7, cost: 600, buildTime: 8, weapon: 'turret_gun', requires: ['barracks'] },
