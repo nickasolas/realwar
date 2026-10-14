@@ -51,7 +51,10 @@ npm start            # http://localhost:8080
   can't. Roads make ground units about 1.6x faster and can be cut through
   forest. Walls and gates build alongside other construction, don't count
   for victory, and aren't auto-targeted; an attack-moving army that finds
-  its way walled off breaches the nearest wall.
+  its way walled off breaches the nearest wall. On Normal and Hard the
+  computer walls in its own base once its core structures are up, with
+  gates facing you, its oil wells and the main road, and a paved road out
+  through the main gate; it rebuilds segments you knock down.
 - **Win:** destroy every enemy structure (walls and gates don't count).
 
 ### Controls

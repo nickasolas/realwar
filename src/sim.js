@@ -10,6 +10,7 @@ import { createRng } from './rng.js';
 const MAX_QUEUE = 5;
 const FOG_INTERVAL = 4; // ticks between visibility refreshes
 const REPAIR_INTERVAL = 5; // ticks between repair updates
+const PATHS_PER_TICK = 4; // group orders path at most this many units per tick
 
 export function damageAgainst(weapon, armor) {
   return weapon.damage * (weapon.vs?.[armor] ?? 1);
@@ -133,7 +134,10 @@ export class Game {
 
   canPlace(owner, type, tx, ty) {
     const def = BUILDINGS[type];
-    if (!this.map.canPlace(tx, ty, def.w, def.h, def.coastal)) return false;
+    if (def.segment) {
+      // Walls and gates can also go through woodland; water and rock stay natural barriers.
+      if (!this.map.inBounds(tx, ty) || this.map.occupied[ty * this.map.w + tx] || !this.map.isLand(tx, ty)) return false;
+    } else if (!this.map.canPlace(tx, ty, def.w, def.h, def.coastal)) return false;
     if (!this.inBuildRadius(owner, tx, ty, def.w, def.h)) return false;
     for (const well of this.map.wells) {
       if (well.x >= tx && well.x < tx + def.w && well.y >= ty && well.y < ty + def.h) return false;
@@ -174,7 +178,10 @@ export class Game {
       u.order = { type: attackMove ? 'attackMove' : 'move', dest };
       u.target = null;
       u.harvestState = null;
-      this.setPath(u, dest.x, dest.y);
+      // Big groups spread their path searches over a few ticks so a whole
+      // army being ordered at once doesn't stall a single frame.
+      if (i < PATHS_PER_TICK) this.setPath(u, dest.x, dest.y);
+      else { u.path = null; u.pendingPath = { at: this.tick + Math.floor(i / PATHS_PER_TICK) }; }
     });
     return units.length > 0;
   }
@@ -186,6 +193,7 @@ export class Game {
     for (const u of units) {
       if (!u.def.weapon) continue;
       u.order = { type: 'attack', targetId };
+      u.pendingPath = null;
       u.target = targetId;
       u.harvestState = null;
       u.path = null;
@@ -198,6 +206,7 @@ export class Game {
     const units = this.ownedUnits(playerId, ids).filter((u) => u.def.harvester);
     for (const u of units) {
       u.order = { type: 'harvest' };
+      u.pendingPath = null;
       u.well = wellIndex;
       u.harvestState = u.cargo >= TRUCK_CAPACITY ? 'toDropoff' : 'toWell';
       u.path = null;
@@ -209,6 +218,7 @@ export class Game {
   cmdStop(playerId, ids) {
     for (const u of this.ownedUnits(playerId, ids)) {
       u.order = { type: 'idle' };
+      u.pendingPath = null;
       u.path = null;
       u.target = null;
       u.harvestState = null;
@@ -367,9 +377,11 @@ export class Game {
     if (u.def.domain === 'air' || (last && last.x === gx && last.y === gy)) {
       if (pts.length) pts[pts.length - 1] = { x, y };
     }
-    if (!pts.length && this.map.passable(gx, gy, u.def.domain, u.owner)) pts.push({ x, y });
+    // Already in the goal tile: step to the exact point. (An empty path from
+    // anywhere else means the goal can't be reached, e.g. it's walled off.)
+    if (!pts.length && sx === gx && sy === gy) pts.push({ x, y });
     u.path = pts;
-    u.repathAt = this.tick + TICK_RATE * 2;
+    u.repathAt = this.tick + TICK_RATE * 2 + (u.id % 13); // jitter so groups don't repath together
   }
 
   // Advance a unit along its path. Returns true once the path is exhausted.
@@ -399,9 +411,11 @@ export class Game {
   }
 
   moveToward(u, x, y) {
-    // Repath if we have no path, it's stale, or the goal moved.
+    // Repath if we have no path, it's stale, or the goal moved. An empty path
+    // means "as close as we can get" (e.g. the goal is walled off), so wait
+    // for the normal repath interval instead of searching again every tick.
     const goalMoved = !u.pathGoal || Math.hypot(u.pathGoal.x - x, u.pathGoal.y - y) > 1.5;
-    if (!u.path || !u.path.length || goalMoved || this.tick >= u.repathAt) this.setPath(u, x, y);
+    if (!u.path || goalMoved || this.tick >= u.repathAt) this.setPath(u, x, y);
     this.followPath(u);
   }
 
@@ -554,6 +568,11 @@ export class Game {
   updateUnit(u) {
     if (u.cooldown > 0) u.cooldown -= DT;
     if (u.cooldown2 > 0) u.cooldown2 -= DT;
+    if (u.pendingPath) {
+      if (this.tick < u.pendingPath.at) return;
+      u.pendingPath = null;
+      if (u.order.dest) this.setPath(u, u.order.dest.x, u.order.dest.y);
+    }
     const o = u.order;
     const weapon = u.def.weapon ? WEAPONS[u.def.weapon] : null;
 
@@ -635,6 +654,7 @@ export class Game {
     let best = -1, bestD = Infinity;
     this.map.wells.forEach((w, i) => {
       if (w.amount <= 0 || i === exclude) return;
+      if ((u.avoidWells?.[i] ?? 0) > this.tick) return; // recently found unreachable
       const d = Math.hypot(w.x + 0.5 - u.x, w.y + 0.5 - u.y);
       if (d < bestD) { bestD = d; best = i; }
     });
@@ -662,8 +682,19 @@ export class Game {
           if (!well) { u.order = { type: 'idle' }; return; }
         }
         const wx = well.x + 0.5, wy = well.y + 0.5;
-        if (Math.hypot(u.x - wx, u.y - wy) < 0.9) { u.harvestState = 'loading'; u.path = null; }
-        else this.moveToward(u, wx, wy);
+        const dist = Math.hypot(u.x - wx, u.y - wy);
+        if (dist < 0.9) { u.harvestState = 'loading'; u.path = null; u.wellStuck = 0; break; }
+        this.moveToward(u, wx, wy);
+        // Can't get near this well (e.g. it's inside enemy walls): try another
+        // for a minute. Trucks merely queueing beside a busy well are fine.
+        u.wellStuck = u.path && !u.path.length && dist > 2.5 ? (u.wellStuck || 0) + 1 : 0;
+        if (u.wellStuck > TICK_RATE * 3) {
+          (u.avoidWells ||= {})[u.well] = this.tick + TICK_RATE * 60;
+          u.wellStuck = 0;
+          u.well = this.nearestWell(u);
+          u.path = null;
+          if (u.well < 0) u.order = { type: 'idle' };
+        }
         break;
       }
       case 'loading': {

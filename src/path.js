@@ -3,6 +3,7 @@
 class MinHeap {
   constructor() { this.items = []; this.prio = []; }
   get size() { return this.items.length; }
+  clear() { this.items.length = 0; this.prio.length = 0; }
   push(item, p) {
     const a = this.items, q = this.prio;
     let i = a.length;
@@ -34,6 +35,16 @@ class MinHeap {
     }
     return top;
   }
+}
+
+// Per-size scratch buffers shared by all searches (the game is single-threaded).
+let SCRATCH = null;
+function scratch(n) {
+  if (!SCRATCH || SCRATCH.n !== n) {
+    SCRATCH = { n, g: new Float64Array(n), came: new Int32Array(n), seen: new Uint32Array(n), closed: new Uint32Array(n), gen: 0, heap: new MinHeap() };
+  }
+  if (++SCRATCH.gen >= 0xffffffff) { SCRATCH.seen.fill(0); SCRATCH.closed.fill(0); SCRATCH.gen = 1; }
+  return SCRATCH;
 }
 
 const DIRS = [
@@ -71,10 +82,13 @@ export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth =
   if (sx === gx && sy === gy) return [];
 
   const start = sy * w + sx;
-  const gScore = new Map([[start, 0]]);
-  const came = new Map();
-  const closed = new Set();
-  const open = new MinHeap();
+  // Reusable typed-array bookkeeping; a generation stamp marks which
+  // entries belong to this search, so nothing needs clearing between calls.
+  const S = scratch(w * map.h);
+  const gen = S.gen;
+  const open = S.heap;
+  open.clear();
+  S.g[start] = 0; S.seen[start] = gen; S.came[start] = -1;
   const h = (x, y) => {
     const dx = Math.abs(x - gx), dy = Math.abs(y - gy);
     return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
@@ -85,24 +99,26 @@ export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth =
 
   while (open.size) {
     const cur = open.pop();
-    if (closed.has(cur)) continue;
-    closed.add(cur);
+    if (S.closed[cur] === gen) continue;
+    S.closed[cur] = gen;
     const cx = cur % w, cy = (cur - cx) / w;
     if (cx === gx && cy === gy) { bestNode = cur; break; }
     const ch = h(cx, cy);
     if (ch < bestH) { bestH = ch; bestNode = cur; }
     if (++expanded > maxNodes) break;
-    const g = gScore.get(cur);
-    for (const [dx, dy, cost] of DIRS) {
+    const g = S.g[cur];
+    for (let k = 0; k < 8; k++) {
+      const dx = DIRS[k][0], dy = DIRS[k][1];
       const nx = cx + dx, ny = cy + dy;
+      const n = ny * w + nx;
+      if (S.closed[n] === gen && nx >= 0 && nx < w) continue;
       if (!map.passable(nx, ny, domain, owner)) continue;
       if (dx && dy && (!map.passable(cx + dx, cy, domain, owner) || !map.passable(cx, cy + dy, domain, owner))) continue;
-      const n = ny * w + nx;
-      if (closed.has(n)) continue;
-      const ng = g + cost * map.moveCost(nx, ny, domain);
-      if (ng < (gScore.get(n) ?? Infinity)) {
-        gScore.set(n, ng);
-        came.set(n, cur);
+      const ng = g + DIRS[k][2] * map.moveCost(nx, ny, domain);
+      if (S.seen[n] !== gen || ng < S.g[n]) {
+        S.seen[n] = gen;
+        S.g[n] = ng;
+        S.came[n] = cur;
         open.push(n, ng + h(nx, ny));
       }
     }
@@ -112,8 +128,9 @@ export function findPath(map, sx, sy, gx, gy, domain, maxNodes = 12000, smooth =
   let n = bestNode;
   while (n !== start) {
     path.push({ x: n % w, y: Math.floor(n / w) });
-    n = came.get(n);
-    if (n === undefined) return null;
+    if (S.seen[n] !== gen) return null;
+    n = S.came[n];
+    if (n < 0) return null;
   }
   path.reverse();
   return smooth ? smoothPath(map, sx, sy, path, domain, owner) : path;

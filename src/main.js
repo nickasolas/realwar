@@ -736,4 +736,4 @@ resize();
 requestAnimationFrame(frame);
 
 // Exposed for debugging from the console.
-window.__rw = { get game() { return game; }, get renderer() { return renderer; }, cam, ui };
+window.__rw = { get game() { return game; }, get renderer() { return renderer; }, get ai() { return ai; }, cam, ui };

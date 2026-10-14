@@ -401,3 +401,34 @@ test('roads can be cut through forest but not across water', () => {
   g.cmdBuildRoad(0, [{ x, y }]);
   assert.equal(g.map.moveCost(x, y, 'ground'), ROAD_COST);
 });
+
+test('a truck gives up on a walled-off well and picks another', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const target = g.map.wells.map((w, i) => ({ w, i })).sort((a, b) => Math.hypot(a.w.x - hq.x, a.w.y - hq.y) - Math.hypot(b.w.x - hq.x, b.w.y - hq.y))[0];
+  // Enclose that well with enemy walls.
+  for (let y = target.w.y - 2; y <= target.w.y + 2; y++) {
+    for (let x = target.w.x - 2; x <= target.w.x + 2; x++) {
+      if (Math.max(Math.abs(x - target.w.x), Math.abs(y - target.w.y)) === 2 && g.map.inBounds(x, y) && !g.map.occupied[y * g.map.w + x]) g.map.occupied[y * g.map.w + x] = -1;
+    }
+  }
+  const truck = g.addUnit(0, 'truck', hq.x + 3, hq.y + 3);
+  g.cmdHarvest(0, [truck.id], target.i);
+  let searches = 0;
+  const orig = g.setPath.bind(g);
+  g.setPath = (u, x, y) => { if (u === truck) searches++; orig(u, x, y); };
+  run(g, 20);
+  assert.notEqual(truck.well, target.i, 'switched wells');
+  assert.ok(searches < 40, `bounded path searches (${searches})`);
+});
+
+test('units cannot slip through a wall to reach an enclosed point', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const cx = Math.floor(hq.x) + 4, cy = Math.floor(hq.y) + 2;
+  for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x !== cx || y !== cy) g.map.occupied[y * g.map.w + x] = -1;
+  const tank = g.addUnit(0, 'tank', cx + 0.5, cy + 3.5);
+  g.cmdMove(0, [tank.id], cx + 0.5, cy + 0.5);
+  run(g, 15);
+  assert.ok(Math.hypot(tank.x - cx - 0.5, tank.y - cy - 0.5) > 1.2, `stayed outside (${tank.x.toFixed(2)}, ${tank.y.toFixed(2)})`);
+});

@@ -1,4 +1,5 @@
 import { BUILDINGS, UNITS, TICK_RATE } from './config.js';
+import { lineTiles } from './map.js';
 
 // Scripted opponent. It issues the same commands a human would through the
 // Game command API, so it plays by the same economic rules.
@@ -11,11 +12,17 @@ const ARMY_MIX = {
   shipyard: ['gunboat', 'gunboat', 'destroyer'],
 };
 
+// wallAfter: how many build-plan steps must be done before the AI starts
+// walling its base (null = never). wallMargin: tiles of room inside the wall.
 const DIFFICULTY = {
-  easy: { thinkEvery: 2.0, attackSize: 14, maxTrucks: 3, incomeBonus: 0 },
-  normal: { thinkEvery: 1.0, attackSize: 10, maxTrucks: 4, incomeBonus: 0 },
-  hard: { thinkEvery: 0.5, attackSize: 8, maxTrucks: 6, incomeBonus: 2 },
+  easy: { thinkEvery: 2.0, attackSize: 14, maxTrucks: 3, incomeBonus: 0, wallAfter: null },
+  normal: { thinkEvery: 1.0, attackSize: 10, maxTrucks: 4, incomeBonus: 0, wallAfter: BUILD_PLAN.length, wallMargin: 2 },
+  hard: { thinkEvery: 0.5, attackSize: 8, maxTrucks: 6, incomeBonus: 2, wallAfter: 5, wallMargin: 4 },
 };
+
+const WALL_RESERVE = 450; // production holds this back while the wall is unfinished
+const WALL_FLOAT = 100; // walls never spend the last of the money
+const WALL_BATCH = 10; // most segments placed per think
 
 export class AIController {
   constructor(game, playerId, difficulty = 'normal') {
@@ -52,6 +59,7 @@ export class AIController {
     this.manageRepairs();
     this.manageArmy();
     this.manageScouting();
+    this.manageFortifications();
   }
 
   // Switch on repair for damaged structures and pull badly hurt vehicles,
@@ -123,17 +131,112 @@ export class AIController {
     const counts = {};
     for (const b of this.mine((e) => e.kind === 'building')) counts[b.type] = (counts[b.type] || 0) + 1;
     const wanted = {};
-    for (const type of BUILD_PLAN) {
+    for (let i = 0; i < BUILD_PLAN.length; i++) {
+      const type = BUILD_PLAN[i];
       wanted[type] = (wanted[type] || 0) + 1;
       if ((counts[type] || 0) >= wanted[type]) continue;
+      this.planProgress = i;
       if (!this.game.canBuildType(this.id, type)) return;
       const spot = this.findSpot(type);
-      if (!spot) continue;
+      if (!spot) continue; // can't be sited here (e.g. no coast): treat as done
       const def = BUILDINGS[type];
       if (p.credits < def.cost + 200) { this.savingFor = def.cost; return; }
       this.game.cmdPlace(this.id, type, spot.x, spot.y);
       return;
     }
+    this.planProgress = BUILD_PLAN.length;
+  }
+
+  // ------------------------------------------------------------ walls
+
+  // Wall in the base once the build plan is far enough along: a ring a few
+  // tiles outside the outermost structures, gates toward the enemy, the
+  // home oil wells and the main road, built enemy-side first, a few
+  // segments at a time from spare money. Lost segments are rebuilt.
+  manageFortifications() {
+    const g = this.game;
+    const p = this.player;
+    if (this.cfg.wallAfter == null || (this.planProgress ?? 0) < this.cfg.wallAfter) return;
+    if (!this.wallPlan) this.wallPlan = this.planWalls();
+    if (!this.wallPlan) return;
+    let budget = p.credits - WALL_FLOAT - (this.savingFor || 0);
+    let placed = 0;
+    this.wallsPending = false;
+    for (const t of this.wallPlan.tiles) {
+      if (placed >= WALL_BATCH || budget < BUILDINGS.wall.cost) break;
+      const id = g.map.occupied[t.y * g.map.w + t.x];
+      const there = id > 0 ? g.get(id) : null;
+      if (there && there.owner === this.id && there.def.segment) continue;
+      this.wallsPending = true;
+      const type = t.gate ? 'gate' : 'wall';
+      if (budget < BUILDINGS[type].cost) continue;
+      if (g.cmdPlace(this.id, type, t.x, t.y)) { budget -= BUILDINGS[type].cost; placed++; }
+    }
+    // Pave a road from the Command Center out through the main gate.
+    if (!this.roadBuilt && this.wallPlan.mainGate && p.credits > WALL_FLOAT + 300) {
+      const hq = this.mine((e) => e.type === 'hq')[0];
+      if (hq) {
+        const gt = this.wallPlan.mainGate;
+        const start = { x: Math.round(hq.x + Math.sign(gt.x - hq.x) * 2), y: Math.round(hq.y + Math.sign(gt.y - hq.y) * 2) };
+        const out = { x: gt.x + Math.sign(gt.x - hq.x) * 2, y: gt.y + Math.sign(gt.y - hq.y) * 2 };
+        g.cmdBuildRoad(this.id, [...lineTiles(start, gt, true), ...lineTiles(gt, out, true)]);
+        this.roadBuilt = true;
+      }
+    }
+  }
+
+  planWalls() {
+    const g = this.game;
+    const m = g.map;
+    const blds = this.mine((e) => e.kind === 'building' && !e.def.segment);
+    if (!blds.length) return null;
+    const margin = this.cfg.wallMargin ?? 2;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const b of blds) {
+      x0 = Math.min(x0, b.tx); y0 = Math.min(y0, b.ty);
+      x1 = Math.max(x1, b.tx + b.w - 1); y1 = Math.max(y1, b.ty + b.h - 1);
+    }
+    x0 = Math.max(1, x0 - margin); y0 = Math.max(1, y0 - margin);
+    x1 = Math.min(m.w - 2, x1 + margin); y1 = Math.min(m.h - 2, y1 + margin);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+
+    // Perimeter tiles in walking order, keeping only buildable land.
+    const ring = [];
+    for (let x = x0; x <= x1; x++) ring.push({ x, y: y0 });
+    for (let y = y0 + 1; y <= y1; y++) ring.push({ x: x1, y });
+    for (let x = x1 - 1; x >= x0; x--) ring.push({ x, y: y1 });
+    for (let y = y1 - 1; y > y0; y--) ring.push({ x: x0, y });
+    const land = ring.filter((t) => m.isLand(t.x, t.y) && m.occupied[t.y * m.w + t.x] >= 0
+      && !m.wells.some((w) => w.x === t.x && w.y === t.y));
+    if (land.length < 4) return null;
+
+    // Gates: toward the enemy, toward each home well outside the wall, and
+    // wherever the main road crosses the ring. Keep them apart.
+    const gates = [];
+    const addGateToward = (tx, ty) => {
+      const ang = Math.atan2(ty - cy, tx - cx);
+      let best = null, bestD = Infinity;
+      for (const t of land) {
+        const d = Math.abs(Math.atan2(Math.sin(Math.atan2(t.y - cy, t.x - cx) - ang), Math.cos(Math.atan2(t.y - cy, t.x - cx) - ang)));
+        if (d < bestD) { bestD = d; best = t; }
+      }
+      if (best && !gates.some((gt) => Math.hypot(gt.x - best.x, gt.y - best.y) < 5)) gates.push(best);
+      return best;
+    };
+    const enemy = m.starts[1 - this.id] || { x: m.w / 2, y: m.h / 2 };
+    const mainGate = addGateToward(enemy.x, enemy.y);
+    for (const w of m.wells) {
+      const inside = w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1;
+      if (!inside && Math.hypot(w.x - cx, w.y - cy) < 16) addGateToward(w.x, w.y);
+    }
+    const roadSet = new Set(m.roads.flat().map((rp) => rp.y * m.w + rp.x));
+    for (const t of land) {
+      if (roadSet.has(t.y * m.w + t.x) && !gates.some((gt) => Math.hypot(gt.x - t.x, gt.y - t.y) < 5)) gates.push(t);
+    }
+    // Build the side facing the enemy first.
+    const tiles = land.map((t) => ({ ...t, gate: gates.includes(t) }));
+    tiles.sort((a, b) => Math.hypot(a.x - mainGate.x, a.y - mainGate.y) - Math.hypot(b.x - mainGate.x, b.y - mainGate.y));
+    return { tiles, mainGate, rect: { x0, y0, x1, y1 } };
   }
 
   findSpot(type) {
@@ -187,8 +290,9 @@ export class AIController {
   manageProduction() {
     const g = this.game;
     const producers = this.mine((e) => e.kind === 'building' && e.progress >= 1 && ARMY_MIX[e.type]);
-    // Save up for the next structure, but never stall an empty factory for long.
-    const reserve = this.savingFor || 0;
+    // Save up for the next structure (or the wall), but never stall an
+    // empty factory for long.
+    const reserve = this.savingFor || (this.wallsPending ? WALL_RESERVE : 0);
     for (const b of producers) {
       if (b.queue.length >= (reserve ? 1 : 2)) continue;
       if (reserve && b.queue.length === 0 && this.game.time % 20 > this.cfg.thinkEvery) continue;
