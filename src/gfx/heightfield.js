@@ -6,6 +6,8 @@ import { createRng } from '../rng.js';
 
 export const RES = 3; // vertices per tile edge
 export const WATER_LEVEL = 0;
+// Nudges the drawn shore seaward so rounding never eats into sailable water.
+const SHORE_BIAS = 0.1;
 export const DECK_LEVEL = 0.62; // bridge deck height over open water
 
 function tileBaseHeight(map, i) {
@@ -111,6 +113,59 @@ export class HeightField {
         }
         this.heights[j * vw + i] = raw[j * vw + i] * 0.4 + (sum / n) * 0.6;
       }
+    }
+    this.fitShoreline();
+  }
+
+  // Smoothing drags coastal land under the waterline (and shallows above
+  // it), so the visible shore would not match where ships can sail. Pin the
+  // shoreline to the tile boundary: land rises and water sinks with
+  // distance from the coast.
+  fitShoreline() {
+    const { map, vw, vh, heights } = this;
+    const wet = (x, y) => map.isWater(Math.min(map.w - 1, Math.max(0, x)), Math.min(map.h - 1, Math.max(0, y)));
+    // Signed distance to the coast: positive on land, negative over water,
+    // zero on the tile edges between them.
+    const sd = new Float32Array(vw * vh);
+    for (let j = 0; j < vh; j++) {
+      for (let i = 0; i < vw; i++) {
+        const x = i / RES, z = j / RES;
+        const tx = Math.floor(x), tz = Math.floor(z);
+        let dw = 3, dl = 3;
+        for (let y = tz - 3; y <= tz + 2; y++) {
+          for (let xx = tx - 3; xx <= tx + 2; xx++) {
+            const dx = Math.max(xx - x, 0, x - (xx + 1)), dz = Math.max(y - z, 0, z - (y + 1));
+            const d = Math.hypot(dx, dz);
+            if (wet(xx, y)) dw = Math.min(dw, d); else dl = Math.min(dl, d);
+          }
+        }
+        sd[j * vw + i] = dw - dl;
+      }
+    }
+    // A light blur rounds off the square tile corners (both ways, so the
+    // shore stays within a fraction of a tile of the real boundary).
+    const tmp = new Float32Array(sd.length);
+    for (let pass = 0; pass < 1; pass++) {
+      for (let j = 0; j < vh; j++) {
+        for (let i = 0; i < vw; i++) {
+          let sum = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const x = i + dx, y = j + dy;
+              if (x < 0 || y < 0 || x >= vw || y >= vh) continue;
+              sum += sd[y * vw + x]; n++;
+            }
+          }
+          tmp[j * vw + i] = sum / n;
+        }
+      }
+      sd.set(tmp);
+    }
+    for (let k = 0; k < sd.length; k++) {
+      const d = sd[k] + SHORE_BIAS;
+      // Land rises from the shore (capped near it so high ground doesn't
+      // overhang the water); water deepens away from it.
+      heights[k] = d > 0 ? Math.min(Math.max(heights[k], 0.04 + d * 0.6), 0.06 + d * 2.4) : Math.min(heights[k], -0.02 + d * 0.9);
     }
   }
 

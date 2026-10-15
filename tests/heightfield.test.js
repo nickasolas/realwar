@@ -34,3 +34,19 @@ test('ground units ride on bridge decks above the water', () => {
   }
   assert.ok(checked > 0);
 });
+
+test('the drawn shoreline matches the tiles ships can sail on', () => {
+  for (const seed of [1, 42]) {
+    const m = generateMap(seed);
+    const hf = new HeightField(m, seed);
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      // Sample each tile's centre and just inside each edge (corners are
+      // rounded off a little): land must be dry, water wet.
+      for (const [u, v] of [[0.5, 0.5], [0.5, 0.2], [0.5, 0.8], [0.2, 0.5], [0.8, 0.5]]) {
+        const h = hf.heightAt(x + u, y + v);
+        if (m.isWater(x, y)) assert.ok(h < 0, `seed ${seed}: water tile ${x},${y} drawn as land`);
+        else assert.ok(h > 0, `seed ${seed}: land tile ${x},${y} drawn under water`);
+      }
+    }
+  }
+});
