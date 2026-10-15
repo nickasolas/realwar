@@ -574,3 +574,26 @@ test('an AI that loses its trucks saves for a new one', () => {
   const queued = [...g.entities.values()].some((e) => e.owner === 1 && e.queue?.some((q) => q.type === 'truck'));
   assert.ok(trucks > 0 || queued, 'bought a truck from the Command Center income');
 });
+
+test('free-for-all: four players, eliminated sides drop out until one is left', () => {
+  const g = new Game({ seed: 4, mapSize: 128, players: [{ ai: false }, { ai: true }, { ai: true }, { ai: true }] });
+  assert.equal(g.players.length, 4);
+  for (let i = 0; i < 4; i++) assert.ok(find(g, i, 'hq'), `player ${i} has a base`);
+  for (const id of [1, 2]) for (const e of [...g.entities.values()]) if (e.owner === id && e.kind === 'building') g.destroy(e, 0);
+  g.step();
+  assert.equal(g.winner, null, 'two sides remain');
+  assert.ok(g.players[1].defeated && g.players[2].defeated);
+  for (const e of [...g.entities.values()]) if (e.owner === 3 && e.kind === 'building') g.destroy(e, 0);
+  g.step();
+  assert.equal(g.winner, 0);
+});
+
+test('on islands the AI builds a navy instead of marching on the enemy', () => {
+  const g = new Game({ seed: 5, mapSize: 128, mapType: 'islands', players: [{ ai: true }, { ai: true }] });
+  const ai = new AIController(g, 1, 'hard');
+  assert.equal(ai.overland, false);
+  run(g, 900, [ai]);
+  const ships = [...g.entities.values()].filter((e) => e.owner === 1 && e.def.domain === 'naval').length;
+  assert.ok(find(g, 1, 'shipyard'), 'built a Naval Yard');
+  assert.ok(ships > 0, 'has warships');
+});

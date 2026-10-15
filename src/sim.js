@@ -27,10 +27,10 @@ export function canHit(weapon, target) {
 }
 
 export class Game {
-  constructor({ seed = 1, mapSize = 96, players = [{ ai: false }, { ai: true }] } = {}) {
+  constructor({ seed = 1, mapSize = 96, mapType = 'continental', players = [{ ai: false }, { ai: true }] } = {}) {
     this.seed = seed;
     this.rng = createRng(seed ^ 0x9e3779b9);
-    this.map = generateMap(seed, mapSize, mapSize);
+    this.map = generateMap(seed, mapSize, mapSize, { players: players.length, type: mapType });
     this.tick = 0;
     this.time = 0;
     this.nextId = 1;
@@ -73,7 +73,7 @@ export class Game {
     const def = UNITS[type];
     const u = {
       id: this.nextId++, kind: 'unit', type, def, owner,
-      x, y, angle: owner === 0 ? 0.8 : -2.3,
+      x, y, angle: Math.atan2(this.map.h / 2 - y, this.map.w / 2 - x), // face the map centre
       hp: def.hp, maxHp: def.hp, radius: def.radius,
       order: { type: 'idle' }, path: null, pathGoal: null, repathAt: 0,
       cooldown: 0, cooldown2: 0, target: null,
@@ -459,7 +459,9 @@ export class Game {
   setPath(u, x, y) {
     const sx = Math.floor(u.x), sy = Math.floor(u.y);
     const gx = Math.floor(x), gy = Math.floor(y);
-    const path = findPath(this.map, sx, sy, gx, gy, u.def.domain, undefined, true, u.owner);
+    // Bigger maps need a bigger search budget for long trips.
+    const budget = Math.max(12000, (this.map.w * this.map.h) >> 1);
+    const path = findPath(this.map, sx, sy, gx, gy, u.def.domain, budget, true, u.owner);
     u.pathGoal = { x, y };
     if (!path) { u.path = []; return; }
     const pts = path.map((p) => ({ x: p.x + 0.5, y: p.y + 0.5 }));
@@ -994,7 +996,7 @@ export class Game {
     } else {
       // Step off the doorstep.
       u.order = { type: 'move' };
-      this.setPath(u, spot.x + 0.5 + (b.owner === 0 ? 1 : -1), spot.y + 1.5);
+      this.setPath(u, spot.x + 0.5 + (b.x < this.map.w / 2 ? 1 : -1), spot.y + 1.5);
     }
     return true;
   }

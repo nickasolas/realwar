@@ -98,6 +98,8 @@ materials.body.customProgramCacheKey = () => 'surf-v2';
 const PAINT = [
   { body: '#a89d76', dark: '#6e6650' },
   { body: '#5f6a41', dark: '#3c4430' },
+  { body: '#8a8c84', dark: '#55574f' },
+  { body: '#6b5a45', dark: '#463a2c' },
 ];
 
 export function teamColors(owner) {

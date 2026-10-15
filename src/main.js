@@ -1,4 +1,4 @@
-import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH } from './config.js';
+import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH, MAP_SIZES } from './config.js';
 import { lineTiles } from './map.js';
 import { Game } from './sim.js';
 import { AIController } from './ai.js';
@@ -14,7 +14,7 @@ const minimap = $('minimap');
 const mctx = minimap.getContext('2d');
 const audio = new Audio();
 
-let game, renderer, ai;
+let game, renderer, ais = [];
 let running = false, paused = false, speed = 1;
 // Camera target in tile coordinates; zoom is the camera distance.
 const cam = { x: 0, y: 0, zoom: CAMERA.defaultDist };
@@ -36,8 +36,10 @@ function startGame() {
   $('loading').classList.remove('hidden');
   // Let the loading text paint before the heavy world build.
   setTimeout(() => {
-    game = new Game({ seed, players: [{ ai: false }, { ai: true }] });
-    ai = new AIController(game, 1, difficulty);
+    const opponents = Number($('opponents').value) || 1;
+    const players = [{ ai: false }, ...Array.from({ length: opponents }, () => ({ ai: true }))];
+    game = new Game({ seed, mapSize: MAP_SIZES[$('map-size').value] || MAP_SIZES.medium, mapType: $('map-type').value, players });
+    ais = players.slice(1).map((_, i) => new AIController(game, i + 1, difficulty));
     renderer?.dispose();
     renderer = new Renderer3D(view, overlay, game, ME, quality);
     resize();
@@ -806,6 +808,12 @@ function notify(text, warn = false) {
 
 function handleGameEvents() {
   for (const ev of game.events) {
+    if (ev.type === 'defeated' && ev.owner !== ME) {
+      const f = game.players[ev.owner].faction;
+      const left = game.players.filter((p) => p.id !== ME && !p.defeated).length;
+      notify(`${f.name} has been eliminated.${left ? ` ${left} enem${left > 1 ? 'ies' : 'y'} remain${left > 1 ? '' : 's'}.` : ''}`);
+      audio.blip(880);
+    }
     // Enemy missile launches are detected wherever they happen.
     if (ev.type === 'launch' && ev.owner !== ME) {
       notify('Warning: enemy missile launch detected!', true);
@@ -831,17 +839,20 @@ function handleGameEvents() {
 function showEnd() {
   running = false;
   const win = game.winner === ME;
-  const me = game.players[ME].stats, foe = game.players[1].stats;
   const t = Math.floor(game.time);
   $('end-title').textContent = win ? 'VICTORY' : 'DEFEAT';
   $('end-title').className = win ? 'win' : 'lose';
+  // One column per side: you, then each opponent in its faction colour.
+  const ps = game.players;
+  const head = ps.map((p) => `<th style="color:${p.faction.color}">${p.id === ME ? 'You' : p.faction.name}</th>`).join('');
+  const row = (label, f) => `<tr><td>${label}</td>${ps.map((p) => `<td>${f(p.stats)}</td>`).join('')}</tr>`;
   $('end-stats').innerHTML = `
-    <tr><th></th><th>You</th><th>Enemy</th></tr>
-    <tr><td>Enemies destroyed</td><td>${me.killed}</td><td>${foe.killed}</td></tr>
-    <tr><td>Losses</td><td>${me.lost}</td><td>${foe.lost}</td></tr>
-    <tr><td>Oil harvested</td><td>$${me.harvested}</td><td>$${foe.harvested}</td></tr>
-    <tr><td>Spent on repairs</td><td>$${Math.round(me.repairSpent)}</td><td>$${Math.round(foe.repairSpent)}</td></tr>
-    <tr><td>Mission time</td><td colspan="2">${Math.floor(t / 60)}m ${t % 60}s</td></tr>`;
+    <tr><th></th>${head}</tr>
+    ${row('Enemies destroyed', (s) => s.killed)}
+    ${row('Losses', (s) => s.lost)}
+    ${row('Oil harvested', (s) => `$${s.harvested}`)}
+    ${row('Spent on repairs', (s) => `$${Math.round(s.repairSpent)}`)}
+    <tr><td>Mission time</td><td colspan="${ps.length}">${Math.floor(t / 60)}m ${t % 60}s</td></tr>`;
   $('endscreen').classList.remove('hidden');
 }
 
@@ -858,14 +869,15 @@ function frame(now) {
       let steps = 0;
       while (acc >= DT && steps < 8) {
         for (const e of game.entities.values()) { e.px = e.x; e.py = e.y; }
-        ai.update();
+        for (const a of ais) a.update();
         game.step();
         handleGameEvents();
         renderer.consumeEvents(audio);
         game.events.length = 0;
         acc -= DT;
         steps++;
-        if (game.winner !== null) { showEnd(); break; }
+        // The mission ends when one side is left, or when you are knocked out.
+        if (game.winner !== null || game.players[ME].defeated) { showEnd(); break; }
       }
     }
     audio.setListener(cam.x, cam.y, cam.zoom * 1.4);
@@ -892,4 +904,4 @@ resize();
 requestAnimationFrame(frame);
 
 // Exposed for debugging from the console.
-window.__rw = { get game() { return game; }, get renderer() { return renderer; }, get ai() { return ai; }, cam, ui };
+window.__rw = { get game() { return game; }, get renderer() { return renderer; }, get ais() { return ais; }, cam, ui };

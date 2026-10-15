@@ -57,7 +57,28 @@
         <h1>REAL WAR <span>Reforged</span></h1>
         <p class="tagline">Modern combined-arms warfare. Land, sea and air.</p>
         <div class="form">
-          <label>Opponent
+          <label>Map
+            <select id="map-type">
+              <option value="continental" selected title="Land masses split by sea channels, joined by bridges">Continental</option>
+              <option value="islands" title="Every base on its own island: no land route, so navy and air decide it">Islands (naval)</option>
+            </select>
+          </label>
+          <label>Map size
+            <select id="map-size">
+              <option value="small">Small (96×96)</option>
+              <option value="medium" selected>Medium (128×128)</option>
+              <option value="large">Large (160×160)</option>
+              <option value="huge">Huge (192×192)</option>
+            </select>
+          </label>
+          <label>Enemies
+            <select id="opponents">
+              <option value="1" selected>1 opponent</option>
+              <option value="2">2 opponents (free-for-all)</option>
+              <option value="3">3 opponents (free-for-all)</option>
+            </select>
+          </label>
+          <label>Difficulty
             <select id="difficulty">
               <option value="easy">Easy</option>
               <option value="normal" selected>Normal</option>
@@ -94,7 +115,8 @@
             <li><b>Paratroopers</b> fly to the Airbase's rally point and drop four squads; right-click with the transport selected to change the drop zone. <b>Submarines</b> are hidden unless an enemy is within a few tiles (ships' sonar reaches further). Select a charged <b>ICBM Silo</b> and press <b>L</b> to pick a target anywhere.</li>
             <li>Supply Trucks pump oil from wells and haul it to your Command Center or a Supply Depot. Your Command Center also pays a small income ($5/s). If you're out of trucks and can't afford one, it sends a free truck after 90 seconds.</li>
             <li>Shift-click a unit button to queue five; right-click to cancel.</li>
-            <li>Destroy every enemy structure to win.</li>
+            <li>Destroy every enemy structure to win. With several opponents it's a free-for-all: they fight each other too.</li>
+            <li><b>Islands</b> maps have no land route between bases: win with ships, aircraft, paratroopers and missiles.</li>
           </ul>
         </details>
       </div>

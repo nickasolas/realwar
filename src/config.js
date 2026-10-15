@@ -30,7 +30,13 @@ export const Armor = Object.freeze({
 export const FACTIONS = [
   { id: 0, name: 'Allied Coalition', short: 'AC', color: '#3d8bff', dark: '#1d4c99' },
   { id: 1, name: 'Liberation Front', short: 'LF', color: '#e8473c', dark: '#8a211a' },
+  { id: 2, name: 'Northern Pact', short: 'NP', color: '#f0b429', dark: '#8f6610' },
+  { id: 3, name: 'Southern Union', short: 'SU', color: '#3fc6a0', dark: '#1d7560' },
 ];
+
+// Menu choices for a skirmish.
+export const MAP_SIZES = { small: 96, medium: 128, large: 160, huge: 192 };
+export const MAX_OPPONENTS = 3;
 
 export const STARTING_CREDITS = 3000;
 export const OIL_PER_WELL = 6000;

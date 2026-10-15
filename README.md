@@ -29,6 +29,19 @@ npm start            # http://localhost:8080
 
 ## How it plays
 
+- **Skirmish setup:** pick the map type, map size (Small 96×96, Medium
+  128×128, Large 160×160, Huge 192×192), 1–3 computer opponents
+  (more than one is a free-for-all), difficulty and an optional seed.
+  - *Continental*: land masses split by sea channels and joined by bridges.
+    Two players face each other across a diagonal channel. Three or four get
+    a corner each of a map split into quarters, with roads around the ring.
+  - *Islands*: every base has its own island, with oil and a shoreline close
+    by, and there's no land route to any enemy. Win with warships, aircraft,
+    paratroopers and missiles. Ground forces defend.
+  Every map is symmetric, so each start is equally fair. The computer reads
+  the map: on islands it builds its fleet and air force first and keeps a
+  small ground garrison; with several enemies it goes after the nearest.
+
 - **Economy:** Supply Trucks pump oil from wells and haul it to a Command
   Center or Supply Depot. Wells run dry, so expansion matters. A standing
   Command Center pays a small income ($5/s), and a player left with no trucks
@@ -111,7 +124,7 @@ ambient occlusion, bloom and tilt-shift).
 | File | Role |
 | --- | --- |
 | `src/config.js` | All balance data: units, structures, weapons, armor modifiers |
-| `src/map.js` | Seeded, point-symmetric map generator (sea channel, bridges ships sail under, canals joining ponds to the sea, oil) |
+| `src/map.js` | Seeded, symmetric map generator for 2–4 players: continental (sea channels, bridges ships sail under, canals joining ponds to the sea) or islands |
 | `src/path.js` | A* pathfinding per movement domain with path smoothing |
 | `src/sim.js` | Deterministic fixed-step simulation (20 ticks/s) and the command API |
 | `src/ai.js` | Computer opponent; uses the same commands as the player |

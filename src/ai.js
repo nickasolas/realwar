@@ -6,6 +6,11 @@ import { lineTiles } from './map.js';
 // Steps that need research (the ICBM Silo) are skipped until it's done.
 const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'depot', 'shipyard', 'samsite', 'airfield', 'lab', 'refinery', 'turret', 'samsite', 'silo'];
 
+// Island maps: no land route to the enemy, so the fleet and air force come
+// first and ground forces only defend.
+const NAVAL_PLAN = ['refinery', 'barracks', 'factory', 'shipyard', 'turret', 'airfield', 'samsite', 'shipyard', 'depot', 'lab', 'refinery', 'samsite', 'turret', 'silo'];
+const GROUND_GARRISON = 10; // most ground units kept when they can't reach the enemy
+
 // Production rotations; units that still need research are skipped.
 const ARMY_MIX = {
   barracks: ['infantry', 'infantry', 'rocketeer', 'commando'],
@@ -18,7 +23,7 @@ const ARMY_MIX = {
 // walling its base (null = never). wallMargin: tiles of room inside the wall.
 const DIFFICULTY = {
   easy: { thinkEvery: 2.0, attackSize: 14, maxTrucks: 3, incomeBonus: 0, wallAfter: null },
-  normal: { thinkEvery: 1.0, attackSize: 10, maxTrucks: 4, incomeBonus: 0, wallAfter: BUILD_PLAN.length, wallMargin: 2 },
+  normal: { thinkEvery: 1.0, attackSize: 10, maxTrucks: 4, incomeBonus: 0, wallAfter: 'plan', wallMargin: 2 },
   hard: { thinkEvery: 0.5, attackSize: 8, maxTrucks: 6, incomeBonus: 2, wallAfter: 5, wallMargin: 4 },
 };
 
@@ -43,6 +48,59 @@ export class AIController {
   }
 
   get player() { return this.game.players[this.id]; }
+
+  // Tiles our ground forces can reach from home (terrain only), computed once.
+  get reach() {
+    if (!this._reach) {
+      const m = this.game.map, s = m.starts[this.id];
+      const seen = new Uint8Array(m.w * m.h);
+      const stack = [];
+      const push = (x, y) => {
+        const i = y * m.w + x;
+        if (!m.inBounds(x, y) || seen[i] || !(m.isLand(x, y) || m.bridge[i])) return;
+        seen[i] = 1; stack.push(i);
+      };
+      push(s.x, s.y + 3);
+      while (stack.length) {
+        const c = stack.pop(), x = c % m.w, y = (c - x) / m.w;
+        push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+      }
+      this._reach = seen;
+    }
+    return this._reach;
+  }
+
+  canWalkTo(x, y) {
+    const m = this.game.map;
+    // Check the tile and its neighbours (a structure's centre may sit on rock).
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const tx = Math.floor(x) + dx, ty = Math.floor(y) + dy;
+      if (m.inBounds(tx, ty) && this.reach[ty * m.w + tx]) return true;
+    }
+    return false;
+  }
+
+  // Can our army walk to any living enemy's base? If not, play a naval game.
+  get overland() {
+    if (this._overland == null) this._overland = this.enemies().some((p) => this.canWalkTo(this.game.map.starts[p.id].x, this.game.map.starts[p.id].y + 3));
+    return this._overland;
+  }
+
+  get plan() { return this.overland ? BUILD_PLAN : NAVAL_PLAN; }
+
+  enemies() { return this.game.players.filter((p) => p.id !== this.id && !p.defeated); }
+
+  // Start position of the nearest living enemy.
+  enemyStart() {
+    const m = this.game.map, home = m.starts[this.id];
+    let best = null, bestD = Infinity;
+    for (const p of this.enemies()) {
+      const s = m.starts[p.id];
+      const d = Math.hypot(s.x - home.x, s.y - home.y);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best || { x: m.w / 2, y: m.h / 2 };
+  }
 
   mine(filter) {
     const out = [];
@@ -117,7 +175,7 @@ export class AIController {
     }
     for (const d of drones) {
       if (d.order.type !== 'idle') continue;
-      const spots = [g.map.starts[1 - this.id], ...g.map.wells];
+      const spots = [...this.enemies().map((p) => g.map.starts[p.id]), ...g.map.wells];
       const s = g.rng.pick(spots);
       g.cmdMove(this.id, [d.id], s.x + 0.5, s.y + 0.5);
     }
@@ -151,8 +209,9 @@ export class AIController {
     const counts = {};
     for (const b of this.mine((e) => e.kind === 'building')) counts[b.type] = (counts[b.type] || 0) + 1;
     const wanted = {};
-    for (let i = 0; i < BUILD_PLAN.length; i++) {
-      const type = BUILD_PLAN[i];
+    const plan = this.plan;
+    for (let i = 0; i < plan.length; i++) {
+      const type = plan[i];
       wanted[type] = (wanted[type] || 0) + 1;
       if ((counts[type] || 0) >= wanted[type]) continue;
       if (BUILDINGS[type].tech && !this.game.hasTech(this.id, BUILDINGS[type].tech)) continue;
@@ -165,7 +224,7 @@ export class AIController {
       this.game.cmdPlace(this.id, type, spot.x, spot.y);
       return;
     }
-    this.planProgress = BUILD_PLAN.length;
+    this.planProgress = plan.length;
   }
 
   // ------------------------------------------------------------ walls
@@ -177,7 +236,10 @@ export class AIController {
   manageFortifications() {
     const g = this.game;
     const p = this.player;
-    if (this.cfg.wallAfter == null || (this.planProgress ?? 0) < this.cfg.wallAfter) return;
+    // Walls only matter when the enemy can march up to them.
+    if (this.cfg.wallAfter == null || !this.overland) return;
+    const after = this.cfg.wallAfter === 'plan' ? this.plan.length : this.cfg.wallAfter;
+    if ((this.planProgress ?? 0) < after) return;
     if (!this.wallPlan) this.wallPlan = this.planWalls();
     if (!this.wallPlan) return;
     let budget = p.credits - WALL_FLOAT - (this.savingFor || 0);
@@ -244,7 +306,7 @@ export class AIController {
       if (best && !gates.some((gt) => Math.hypot(gt.x - best.x, gt.y - best.y) < 5)) gates.push(best);
       return best;
     };
-    const enemy = m.starts[1 - this.id] || { x: m.w / 2, y: m.h / 2 };
+    const enemy = this.enemyStart();
     const mainGate = addGateToward(enemy.x, enemy.y);
     for (const w of m.wells) {
       const inside = w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1;
@@ -265,7 +327,7 @@ export class AIController {
     const def = BUILDINGS[type];
     const hq = this.mine((e) => e.type === 'hq')[0] || this.mine((e) => e.kind === 'building')[0];
     if (!hq) return null;
-    const enemyStart = g.map.starts[1 - this.id] || g.map.starts[0];
+    const enemyStart = this.enemyStart();
     const towardEnemy = Math.atan2(enemyStart.y - hq.y, enemyStart.x - hq.x);
     // Big or coastal footprints need a wider search; sample every tile of each ring.
     const maxR = def.coastal || def.w * def.h > 9 ? 16 : 9;
@@ -317,7 +379,9 @@ export class AIController {
     // Save up for the next structure (or the wall), but never stall an
     // empty factory for long.
     const reserve = this.savingFor || (this.wallsPending ? WALL_RESERVE : 0);
+    const ground = this.overland ? 0 : this.mine((e) => e.kind === 'unit' && e.def.domain === 'ground' && !e.def.harvester).length;
     for (const b of producers) {
+      if (!this.overland && (b.type === 'barracks' || b.type === 'factory') && ground >= GROUND_GARRISON) continue;
       if (b.queue.length >= (reserve ? 1 : 2)) continue;
       if (reserve && b.queue.length === 0 && this.game.time % 20 > this.cfg.thinkEvery) continue;
       const mix = ARMY_MIX[b.type].filter((t) => g.unitAvailable(this.id, t));
@@ -351,15 +415,18 @@ export class AIController {
     }
 
     const ready = army.filter((u) => u.order.type === 'idle');
-    const needed = this.cfg.attackSize + this.wave * 2;
-    if (ready.length >= needed && g.time - this.lastAttack > 30) {
-      const target = this.pickTarget();
+    // Ground units that can't walk to the enemy stay home as a garrison.
+    const target = this.pickTarget();
+    const walk = target && this.canWalkTo(target.x, target.y);
+    const strikers = ready.filter((u) => u.def.domain !== 'ground' || walk);
+    const needed = this.overland ? this.cfg.attackSize + this.wave * 2 : Math.ceil(this.cfg.attackSize * 0.6) + this.wave;
+    if (strikers.length >= needed && g.time - this.lastAttack > 30) {
       if (target) {
         this.wave++;
         this.lastAttack = g.time;
         // Ships can only reach coastal targets; send them at the nearest one.
         const groups = { ground: [], naval: [], air: [] };
-        for (const u of ready) groups[u.def.domain].push(u.id);
+        for (const u of strikers) groups[u.def.domain].push(u.id);
         if (groups.ground.length) g.cmdMove(this.id, groups.ground, target.x, target.y, true);
         if (groups.air.length) g.cmdMove(this.id, groups.air, target.x, target.y, true);
         if (groups.naval.length) {
@@ -369,7 +436,7 @@ export class AIController {
       }
     } else if (hq) {
       // Gather idle units at a rally point in front of the base.
-      const enemyStart = g.map.starts[1 - this.id];
+      const enemyStart = this.enemyStart();
       const ang = Math.atan2(enemyStart.y - hq.y, enemyStart.x - hq.x);
       const rx = hq.x + Math.cos(ang) * 7, ry = hq.y + Math.sin(ang) * 7;
       // New units head straight there.
@@ -401,8 +468,9 @@ export class AIController {
     }
     for (const u of this.mine((e) => e.def.transport && e.order.type === 'paradrop' && !e.order.dropped && !e.aiAimed)) {
       // Drop on the enemy economy: a Supply Depot if there is one, else the base.
-      const foes = [...g.entities.values()].filter((e) => e.owner !== this.id && e.kind === 'building' && !e.def.segment);
-      const t = foes.find((e) => e.type === 'refinery') || foes.find((e) => e.type === 'hq') || foes[0];
+      const near = this.pickTarget();
+      const foes = [...g.entities.values()].filter((e) => near && e.owner === near.owner && e.kind === 'building' && !e.def.segment);
+      const t = foes.find((e) => e.type === 'refinery') || foes.find((e) => e.type === 'hq') || near;
       if (t) g.cmdParadrop(this.id, [u.id], t.x + t.w / 2 + 2, t.y + t.h / 2 + 2);
       u.aiAimed = true;
     }

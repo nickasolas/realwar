@@ -90,3 +90,37 @@ test('bridges carry ground units and let ships sail underneath', () => {
     assert.ok(n > 0, `seed ${seed}: has bridges`);
   }
 });
+
+test('four-player continental maps link all bases by land, with one base per corner', () => {
+  for (const seed of [1, 2, 3]) {
+    const m = generateMap(seed, 128, 128, { players: 4 });
+    assert.equal(m.starts.length, 4);
+    for (let i = 1; i < 4; i++) {
+      const a = m.starts[0], b = m.starts[i];
+      const path = findPath(m, a.x, a.y + 3, b.x, b.y + 3, 'ground', 200000);
+      const end = path[path.length - 1];
+      assert.ok(Math.hypot(end.x - b.x, end.y - b.y - 3) < 2, `seed ${seed}: base ${i} reachable`);
+    }
+    // Four-fold symmetry: each base has the same number of nearby wells.
+    const near = m.starts.map((s) => m.wells.filter((w) => Math.hypot(w.x - s.x, w.y - s.y) < 20).length);
+    assert.ok(near.every((n) => n === near[0]), `seed ${seed}: wells per base ${near}`);
+  }
+});
+
+test('island maps separate every base by sea, with oil and coast at home', () => {
+  for (const [players, size] of [[2, 96], [2, 160], [4, 128], [4, 192]]) {
+    const m = generateMap(5, size, size, { players, type: 'islands' });
+    for (let i = 1; i < players; i++) {
+      const a = m.starts[0], b = m.starts[i];
+      const path = findPath(m, a.x, a.y + 3, b.x, b.y + 3, 'ground', 200000);
+      const end = path && path[path.length - 1];
+      assert.ok(!end || Math.hypot(end.x - b.x, end.y - b.y - 3) > 10, `${players}p ${size}: no land route to base ${i}`);
+    }
+    for (const s of m.starts.slice(0, players)) {
+      assert.ok(m.wells.filter((w) => Math.hypot(w.x - s.x, w.y - s.y) < 25).length >= 2, 'oil at home');
+      let coast = Infinity;
+      for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (m.isOpenSea(x, y)) coast = Math.min(coast, Math.hypot(x - s.x, y - s.y));
+      assert.ok(coast < 20, `${players}p ${size}: open sea ${coast.toFixed(1)} tiles from base`);
+    }
+  }
+});

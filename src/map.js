@@ -130,28 +130,108 @@ export class GameMap {
   }
 }
 
-// Generates a two-player map: a continent split by a central sea channel with
-// land bridges, so ground, naval and air forces all matter.
-export function generateMap(seed, w = 96, h = 96) {
+// Map types offered in the menu.
+export const MAP_TYPES = {
+  continental: { name: 'Continental', desc: 'Land masses split by sea channels, joined by bridges.' },
+  islands: { name: 'Islands', desc: 'Every base on its own island: no land route, so navy and air decide it.' },
+};
+
+// Symmetry so every player gets an equivalent position. Two players: point
+// symmetry (opposite corners). Three or four: four-fold rotation (one base
+// per corner; with three players one corner is left empty).
+function symmetry(players, w, h) {
+  if (players <= 2) {
+    return {
+      norm: [([x, y]) => [x, y], ([x, y]) => [1 - x, 1 - y]],
+      tile: [(x, y) => [x, y], (x, y) => [w - 1 - x, h - 1 - y]],
+      // Footprint (x, y, fw, fh) under each transform: [x, y, fw, fh, quarter turns].
+      rect: [(x, y, fw, fh) => [x, y, fw, fh, 0], (x, y, fw, fh) => [w - x - fw, h - y - fh, fw, fh, 2]],
+    };
+  }
+  return {
+    norm: [([x, y]) => [x, y], ([x, y]) => [1 - y, x], ([x, y]) => [1 - x, 1 - y], ([x, y]) => [y, 1 - x]],
+    tile: [(x, y) => [x, y], (x, y) => [w - 1 - y, x], (x, y) => [w - 1 - x, h - 1 - y], (x, y) => [y, h - 1 - x]],
+    rect: [
+      (x, y, fw, fh) => [x, y, fw, fh, 0],
+      (x, y, fw, fh) => [w - y - fh, x, fh, fw, 1],
+      (x, y, fw, fh) => [w - x - fw, h - y - fh, fw, fh, 2],
+      (x, y, fw, fh) => [y, h - x - fw, fh, fw, 3],
+    ],
+  };
+}
+
+// Generates a map for 2-4 players. `type` is a MAP_TYPES key.
+// Continental: land split by sea channels with bridges, so ground, naval and
+// air forces all matter. Islands: each base on its own island.
+export function generateMap(seed, w = 96, h = 96, { players = 2, type = 'continental' } = {}) {
+  if (players > 2 && w !== h) throw new Error('maps for more than two players must be square');
   const rng = createRng(seed);
   const map = new GameMap(w, h);
+  map.type = MAP_TYPES[type] ? type : 'continental';
+  const islands = map.type === 'islands';
   const elev = makeNoise(rng, 64);
   const moist = makeNoise(rng, 64);
+  const sym = symmetry(players, w, h);
+  const four = sym.norm.length === 4;
+  const scale = w / 96; // features sized in tiles grow with the map
 
-  const starts = [
-    { x: Math.round(w * 0.16), y: Math.round(h * 0.2) },
-    { x: Math.round(w * 0.84), y: Math.round(h * 0.8) },
-  ];
+  let first = four ? [0.18, 0.18] : [0.16, 0.2];
+  // Islands keep a fixed size in tiles so the shore stays within building
+  // range of the base; the base sits toward its island's inner shore.
+  const homeIsle = four ? [0.2, 0.2] : [0.18, 0.21];
+  const homeR = Math.min(four ? 0.18 : 0.2, (four ? 24 : 26) / w);
+  if (islands) {
+    const toCentre = Math.atan2(0.5 - homeIsle[1], 0.5 - homeIsle[0]);
+    first = [homeIsle[0] + Math.cos(toCentre) * homeR * 0.35, homeIsle[1] + Math.sin(toCentre) * homeR * 0.35];
+  }
+  const starts = sym.norm.map((f) => {
+    const [x, y] = f(first);
+    return { x: Math.round(x * (w - 1)), y: Math.round(y * (h - 1)) };
+  });
+
+  // Islands: one per base plus a few neutral ones, all symmetric.
+  const isles = [];
+  if (islands) {
+    const add = (x, y, r) => { for (const f of sym.norm) { const [ix, iy] = f([x, y]); isles.push({ x: ix, y: iy, r }); } };
+    add(homeIsle[0], homeIsle[1], homeR);
+    if (four) add(0.5, 0.13, Math.min(0.07, 13 / w));
+    else add(0.8, 0.2, Math.min(0.11, 15 / w));
+    isles.push({ x: 0.5, y: 0.5, r: Math.min(four ? 0.1 : 0.09, 14 / w) });
+    // Bigger seas get scattered islets to break up the open water.
+    if (w >= 128) {
+      add(0.4, 0.27, 7 / w);
+      add(0.27, 0.42, 6 / w);
+    }
+  }
+  // Average noise over the symmetry so every position is equivalent; more
+  // samples flatten the noise, so stretch the contrast to match.
+  const contrast = four ? 2.1 : 1.6;
+  const symNoise = (noise, nx, ny, freq, oct) => {
+    let e = 0;
+    for (const f of sym.norm) { const [x, y] = f([nx, ny]); e += fractal(noise, x * freq, y * freq, oct); }
+    return e / sym.norm.length;
+  };
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const nx = x / w, ny = y / h;
-      // Average with the point-mirrored sample so both sides are equally fair.
-      let e = (fractal(elev, nx * 6, ny * 6, 4) + fractal(elev, (1 - nx) * 6, (1 - ny) * 6, 4)) / 2;
-      e = 0.5 + (e - 0.5) * 1.6;
-      // A diagonal sea channel from top-right to bottom-left.
-      const diag = Math.abs((nx + ny) - 1) / Math.SQRT2;
-      e += Math.min(diag * 2.2, 0.55) - 0.42;
+      const nx = x / (w - 1), ny = y / (h - 1);
+      let e = 0.5 + (symNoise(elev, nx, ny, 6, 4) - 0.5) * contrast;
+      if (islands) {
+        // Land only where an island's (noise-wobbled) radius reaches.
+        let f = -1;
+        for (const is of isles) f = Math.max(f, 1 - Math.hypot(nx - is.x, ny - is.y) / is.r);
+        // Ragged coastlines from finer noise; gentle hills inland, few crags.
+        f += (symNoise(moist, nx, ny, 14, 3) - 0.5) * 0.9 + (e - 0.5) * 0.3;
+        e = f > 0 ? 0.45 + Math.min(f, 0.6) * 0.45 + (e - 0.5) * 0.35 : 0.4 + f * 0.6;
+      } else if (four) {
+        // Sea channels along both centre lines split the map into quarters.
+        const d = Math.min(Math.abs(nx - 0.5), Math.abs(ny - 0.5));
+        e += Math.min(d * 2.6, 0.55) - 0.42;
+      } else {
+        // A diagonal sea channel from top-right to bottom-left.
+        const diag = Math.abs((nx + ny) - 1) / Math.SQRT2;
+        e += Math.min(diag * 2.2, 0.55) - 0.42;
+      }
       // Map edges fall off into ocean.
       const edge = Math.min(nx, ny, 1 - nx, 1 - ny);
       if (edge < 0.06) e -= (0.06 - edge) * 6;
@@ -166,29 +246,39 @@ export function generateMap(seed, w = 96, h = 96) {
       else if (e < 0.44) t = Terrain.SAND;
       else if (e > 0.86) t = Terrain.ROCK;
       else {
-        const m = Math.max(fractal(moist, nx * 9, ny * 9, 3), fractal(moist, (1 - nx) * 9, (1 - ny) * 9, 3));
-        t = m > 0.66 ? Terrain.FOREST : Terrain.GRASS;
+        let m = 0;
+        for (const f of sym.norm) { const [sx, sy] = f([nx, ny]); m = Math.max(m, fractal(moist, sx * 9, sy * 9, 3)); }
+        t = m > (four ? 0.7 : 0.66) ? Terrain.FOREST : Terrain.GRASS;
       }
       map.tiles[y * w + x] = t;
       map.elev[y * w + x] = e;
     }
   }
 
-  // Bridges across the channel so ground armies can meet. Water under them
+  // Bridges across the channels so ground armies can meet. Water under them
   // stays water, so ships can still sail through.
-  const bridges = [0.3, 0.5, 0.7];
-  for (const b of bridges) {
-    const cx = Math.round(w * b), cy = Math.round(h * (1 - b));
-    for (let i = -10; i <= 10; i++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const x = cx + i + dx, y = cy + i + dy;
+  const bridge = (cx, cy, dx, dy, len) => {
+    for (let i = -len; i <= len; i++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const x = cx + i * dx + ox, y = cy + i * dy + oy;
           if (!map.inBounds(x, y)) continue;
           if (map.isWater(x, y)) map.bridge[y * w + x] = 1;
           else if (map.get(x, y) === Terrain.ROCK) map.tiles[y * w + x] = Terrain.SAND;
         }
       }
     }
+  };
+  const span = Math.round(10 * scale);
+  if (!islands && four) {
+    // One bridge across each arm of the cross, rotated into all four.
+    for (const f of sym.tile) {
+      const [cx, cy] = f(Math.round((w - 1) / 2), Math.round((h - 1) * 0.27));
+      const [ex, ey] = f(Math.round((w - 1) / 2) + 1, Math.round((h - 1) * 0.27));
+      bridge(cx, cy, ex - cx, ey - cy, span);
+    }
+  } else if (!islands) {
+    for (const b of [0.3, 0.5, 0.7]) bridge(Math.round(w * b), Math.round(h * (1 - b)), 1, 1, span);
   }
 
   // Keep start areas clear of forest and rock so the base fits.
@@ -200,24 +290,35 @@ export function generateMap(seed, w = 96, h = 96) {
     }
   }
   map.starts = starts;
-  const road = carveRoad(map, starts[0], starts[1]);
-  if (road) map.roads.push(road);
-
-  // Oil wells: a pair near each base, then contested ones around the map.
-  const wellSpots = [];
-  for (const s of starts) {
-    const dir = s.x < w / 2 ? 1 : -1;
-    wellSpots.push({ x: s.x + 6 * dir, y: s.y + 2 }, { x: s.x + 2, y: s.y + 6 * dir });
+  // Roads: between the two bases, or around the ring of four. Islands have none.
+  if (!islands) {
+    const pairs = four ? starts.map((s, i) => [s, starts[(i + 1) % 4]]) : [[starts[0], starts[1]]];
+    for (const [a, b] of pairs) {
+      const road = carveRoad(map, a, b);
+      if (road) map.roads.push(road);
+    }
   }
+
+  // Oil wells: a pair near each base, then contested ones around the map,
+  // every one copied into each symmetric position.
+  const wellSpots = [];
+  const addSym = (x, y) => { for (const f of sym.tile) { const [sx, sy] = f(x, y); wellSpots.push({ x: sx, y: sy }); } };
+  const s0 = starts[0];
+  addSym(s0.x + 6, s0.y + 2);
+  addSym(s0.x + 2, s0.y + 6);
+  // On islands, oil only counts where trucks can reach it: the base islands.
+  const reach = islands ? groundReach(map, s0) : null;
+  const target = Math.round(14 * scale * scale);
   let attempts = 0;
-  while (wellSpots.length < 14 && attempts++ < 2000) {
+  while (wellSpots.length < target && attempts++ < 4000) {
     const x = rng.int(4, w - 5), y = rng.int(4, h - 5);
     if (map.get(x, y) !== Terrain.GRASS) continue;
-    if (wellSpots.some((p) => Math.hypot(p.x - x, p.y - y) < 12)) continue;
-    if (starts.some((p) => Math.hypot(p.x - x, p.y - y) < 12)) continue;
-    wellSpots.push({ x, y });
-    // Mirror for fairness.
-    wellSpots.push({ x: w - 1 - x, y: h - 1 - y });
+    if (reach && !reach[y * w + x]) continue;
+    const spots = sym.tile.map((f) => f(x, y));
+    if (spots.some(([sx, sy]) => wellSpots.some((p) => Math.hypot(p.x - sx, p.y - sy) < (islands ? 7 : 12)))) continue;
+    if (spots.some(([sx, sy]) => starts.some((p) => Math.hypot(p.x - sx, p.y - sy) < (islands ? 8 : 12)))) continue;
+    if (spots.some(([sx, sy]) => map.get(sx, sy) !== Terrain.GRASS)) continue;
+    addSym(x, y);
   }
   for (const p of wellSpots) {
     if (!map.inBounds(p.x, p.y)) continue;
@@ -228,7 +329,7 @@ export function generateMap(seed, w = 96, h = 96) {
   for (let i = 0; i < w * h; i++) if (map.bridge[i] && !map.isWater(i % w, Math.floor(i / w))) map.bridge[i] = 0;
   labelWaterRegions(map);
   digCanals(map, starts);
-  placeProps(map, rng);
+  placeProps(map, rng, sym, Math.round(5 * scale * scale));
   return map;
 }
 
@@ -377,7 +478,7 @@ const PROP_KINDS = [
   { kind: 'silo', w: 1, h: 1 },
 ];
 
-function placeProps(map, rng) {
+function placeProps(map, rng, sym, maxClusters = 5) {
   const roadTiles = new Set();
   for (const road of map.roads) for (const p of road) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) roadTiles.add((p.y + dy) * map.w + (p.x + dx));
   const free = (x, y, w, h) => {
@@ -397,21 +498,20 @@ function placeProps(map, rng) {
     map.setOccupied(x, y, w, h, -1);
   };
   let clusters = 0;
-  for (let attempt = 0; attempt < 400 && clusters < 5; attempt++) {
+  for (let attempt = 0; attempt < 80 * maxClusters && clusters < maxClusters; attempt++) {
     // A farmstead: two to four buildings near each other.
     const cx = rng.int(6, map.w - 7), cy = rng.int(6, map.h - 7);
-    const mx = map.w - 1 - cx, my = map.h - 1 - cy;
-    if (Math.hypot(cx - mx, cy - my) < 10) continue;
+    // Too close to its own symmetric copies and they'd overlap.
+    if (sym.tile.slice(1).some((f) => { const [mx, my] = f(cx, cy); return Math.hypot(cx - mx, cy - my) < 10; })) continue;
     const n = rng.int(2, 4);
     const placed = [];
     for (let k = 0; k < n * 6 && placed.length < n; k++) {
       const t = rng.pick(PROP_KINDS);
       const x = cx + rng.int(-3, 3), y = cy + rng.int(-3, 3);
-      const mxp = map.w - x - t.w, myp = map.h - y - t.h;
-      if (!free(x, y, t.w, t.h) || !free(mxp, myp, t.w, t.h)) continue;
+      const copies = sym.rect.map((f) => f(x, y, t.w, t.h));
+      if (!copies.every(([cx2, cy2, fw, fh]) => free(cx2, cy2, fw, fh))) continue;
       const rot = (t.w === t.h ? rng.int(0, 3) : rng.int(0, 1) * 2) * (Math.PI / 2);
-      add(t.kind, x, y, t.w, t.h, rot);
-      add(t.kind, mxp, myp, t.w, t.h, rot + Math.PI);
+      for (const [cx2, cy2, fw, fh, q] of copies) add(t.kind, cx2, cy2, fw, fh, rot - q * (Math.PI / 2));
       placed.push(t);
     }
     if (placed.length) clusters++;
