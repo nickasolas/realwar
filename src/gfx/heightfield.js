@@ -6,6 +6,7 @@ import { createRng } from '../rng.js';
 
 export const RES = 3; // vertices per tile edge
 export const WATER_LEVEL = 0;
+export const DECK_LEVEL = 0.62; // bridge deck height over open water
 
 function tileBaseHeight(map, i) {
   const t = map.tiles[i];
@@ -41,6 +42,37 @@ export class HeightField {
     this.vh = map.h * RES + 1;
     this.heights = new Float32Array(this.vw * this.vh);
     this.build(seed);
+    this.buildDecks();
+  }
+
+  // Bridge decks: one height per tile corner. Corners over water sit at deck
+  // level; corners touching land ramp down to meet the bank.
+  buildDecks() {
+    const { map } = this;
+    const cw = map.w + 1;
+    this.deck = new Float32Array(cw * (map.h + 1));
+    for (let y = 0; y <= map.h; y++) {
+      for (let x = 0; x <= map.w; x++) {
+        let land = -Infinity, bridged = false;
+        for (const [tx, ty] of [[x - 1, y - 1], [x, y - 1], [x - 1, y], [x, y]]) {
+          if (!map.inBounds(tx, ty)) continue;
+          if (map.bridge[ty * map.w + tx]) bridged = true;
+          else if (map.isLand(tx, ty)) land = Math.max(land, this.heightAt(tx + 0.5, ty + 0.5));
+        }
+        if (bridged) this.deck[y * cw + x] = land > -Infinity ? Math.max(WATER_LEVEL + 0.08, Math.min(DECK_LEVEL, land + 0.06)) : DECK_LEVEL;
+      }
+    }
+  }
+
+  // Deck height at a world position, or null when not on a bridge.
+  deckAt(x, z) {
+    const { map } = this;
+    const tx = Math.floor(x), ty = Math.floor(z);
+    if (!map.inBounds(tx, ty) || !map.bridge[ty * map.w + tx]) return null;
+    const cw = map.w + 1, d = this.deck;
+    const fx = x - tx, fz = z - ty;
+    const a = d[ty * cw + tx], b = d[ty * cw + tx + 1], c = d[(ty + 1) * cw + tx], e = d[(ty + 1) * cw + tx + 1];
+    return (a * (1 - fx) + b * fx) * (1 - fz) + (c * (1 - fx) + e * fx) * fz;
   }
 
   build(seed) {
@@ -94,8 +126,12 @@ export class HeightField {
     return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
   }
 
-  // Height for a ground unit: never below the waterline.
-  groundAt(x, z) { return Math.max(WATER_LEVEL + 0.04, this.heightAt(x, z)); }
+  // Height for a ground unit: on a bridge deck, else never below the waterline.
+  groundAt(x, z) {
+    const h = Math.max(WATER_LEVEL + 0.04, this.heightAt(x, z));
+    const d = this.deck ? this.deckAt(x, z) : null;
+    return d == null ? h : Math.max(h, d);
+  }
 
   // Highest point under a footprint, used to seat structures.
   maxOver(tx, ty, w, h) {

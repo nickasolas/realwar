@@ -50,3 +50,43 @@ test('civilian props block their tiles but never the road, bases or wells', () =
     }
   }
 });
+
+test('nearly all water forms one navigable sea reachable from both bases', () => {
+  for (const seed of [1, 2, 3, 42, 1234, 777]) {
+    const m = generateMap(seed);
+    let water = 0;
+    for (let i = 0; i < m.tiles.length; i++) if (m.waterRegion[i] >= 0) water++;
+    const main = Math.max(...m.waterRegionSize);
+    assert.ok(main / water > 0.85, `seed ${seed}: main sea holds ${(main / water * 100).toFixed(1)}% of water`);
+    for (const s of m.starts) {
+      let near = Infinity;
+      for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (m.isOpenSea(x, y)) near = Math.min(near, Math.hypot(x - s.x, y - s.y));
+      assert.ok(near < 36, `seed ${seed}: open sea within reach of base (${near.toFixed(1)})`);
+    }
+  }
+});
+
+test('Naval Yards need open sea, not a pond', () => {
+  const m = generateMap(1);
+  // Flood a little lake well inland and check it does not count as coast.
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    if (!m.isWater(x, y) || m.isOpenSea(x, y)) continue;
+    assert.ok(m.waterRegionSize[m.waterRegion[y * m.w + x]] < 150);
+  }
+  const s = m.starts[0];
+  assert.equal(m.canPlace(s.x - 1, s.y - 1, 3, 3, true), false, 'no sea next to the HQ spot');
+});
+
+test('bridges carry ground units and let ships sail underneath', () => {
+  for (const seed of [1, 2, 3]) {
+    const m = generateMap(seed);
+    let n = 0;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      if (!m.bridge[y * m.w + x]) continue;
+      n++;
+      assert.ok(m.passable(x, y, 'ground'), `seed ${seed}: deck at ${x},${y} is drivable`);
+      assert.ok(m.passable(x, y, 'naval'), `seed ${seed}: water under ${x},${y} is navigable`);
+    }
+    assert.ok(n > 0, `seed ${seed}: has bridges`);
+  }
+});

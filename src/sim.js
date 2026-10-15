@@ -887,6 +887,8 @@ export class Game {
         for (let x = b.tx - r; x < b.tx + b.w + r; x++) {
           const onRing = x === b.tx - r || x === b.tx + b.w + r - 1 || y === b.ty - r || y === b.ty + b.h + r - 1;
           if (!onRing || !this.map.passable(x, y, domain)) continue;
+          // Launch ships into the open sea, not a neighbouring pond.
+          if (domain === 'naval' && !this.map.isOpenSea(x, y)) continue;
           cands.push({ x, y, score: (y < b.ty ? 2 : 0) + Math.abs(x + 0.5 - b.x) * 0.1 });
         }
       }

@@ -9,6 +9,7 @@ import { HeightField, WATER_LEVEL } from './heightfield.js';
 import { buildTerrain, buildWater, buildVegetation, buildSky, FogOfWar, fowUniforms, patchFow } from './world.js';
 import { buildUnit, buildStructure, buildWell, buildProp, materials } from './models.js';
 import { buildGroundTextures, buildRoadTexture } from './textures.js';
+import { buildBridges } from './bridges.js';
 import { Particles } from './particles.js';
 
 patchFow(materials.body, { clouds: true });
@@ -92,6 +93,11 @@ export class Renderer3D {
     this.water = buildWater(game.map);
     this.vegetation = buildVegetation(game.map, this.hf, game.seed);
     this.scene.add(this.terrain, this.water, this.vegetation);
+    this.roadTex = buildRoadTexture(game.seed, this.renderer);
+    this.bridges = buildBridges(game.map, this.hf, patchFow(new THREE.MeshStandardMaterial({
+      map: this.roadTex, vertexColors: true, roughness: 0.9,
+    }), { clouds: true }));
+    if (this.bridges) this.scene.add(this.bridges);
     // Keep the ground around each well clear for the trucks' loading bays.
     for (const w of game.map.wells) this.vegetation.userData.clear(w.x - 1, w.y - 1, 3, 3);
     this.wells = game.map.wells.map((w) => {
@@ -735,7 +741,7 @@ export class Renderer3D {
     this.roadVersion = map.roadVersion;
     if (!this.roadMat) {
       this.roadMat = patchFow(new THREE.MeshStandardMaterial({
-        map: buildRoadTexture(this.game.seed, this.renderer), vertexColors: true, roughness: 0.95,
+        map: this.roadTex, vertexColors: true, roughness: 0.95,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
       }), { clouds: true });
     }
@@ -935,7 +941,7 @@ export class Renderer3D {
     const p = game.players[this.viewer];
     mctx.fillStyle = '#4a4a46';
     for (let i = 0; i < map.road.length; i++) {
-      if (map.road[i] && p.explored[i]) mctx.fillRect((i % map.w) * s, Math.floor(i / map.w) * s, Math.ceil(s), Math.ceil(s));
+      if ((map.road[i] || map.bridge[i]) && p.explored[i]) mctx.fillRect((i % map.w) * s, Math.floor(i / map.w) * s, Math.ceil(s), Math.ceil(s));
     }
     for (const w of map.wells) {
       if (w.amount <= 0 || !p.explored[w.y * map.w + w.x]) continue;

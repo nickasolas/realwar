@@ -48,6 +48,12 @@ export class GameMap {
     // Player-built roads (speed bonus) and gates (passable for their owner).
     this.road = new Uint8Array(w * h);
     this.roadVersion = 0;
+    // Bridge tiles: still water underneath (ships sail under), but ground
+    // units can drive across the deck.
+    this.bridge = new Uint8Array(w * h);
+    // Connected bodies of navigable water: region id per tile, size per id.
+    this.waterRegion = new Int32Array(w * h).fill(-1);
+    this.waterRegionSize = [];
     this.gateOwner = new Int8Array(w * h).fill(-1);
   }
 
@@ -69,6 +75,13 @@ export class GameMap {
     return t === Terrain.SAND || t === Terrain.GRASS || t === Terrain.FOREST;
   }
 
+  // Water that belongs to a body big enough to sail on (not a pond).
+  isOpenSea(x, y) {
+    if (!this.inBounds(x, y) || !this.isWater(x, y)) return false;
+    const r = this.waterRegion[y * this.w + x];
+    return r >= 0 && this.waterRegionSize[r] >= MIN_SEA;
+  }
+
   // Can an entity of the given domain stand on this tile?
   // `owner` lets a player's own ground units pass through their gates.
   passable(x, y, domain, owner = -1) {
@@ -77,13 +90,13 @@ export class GameMap {
     const i = y * this.w + x;
     if (this.occupied[i] && !(domain === 'ground' && owner >= 0 && this.gateOwner[i] === owner)) return false;
     if (domain === 'naval') return this.isWater(x, y);
-    return this.isLand(x, y);
+    return this.isLand(x, y) || this.bridge[i] === 1;
   }
 
   // Slower movement through forest and sand.
   moveCost(x, y, domain) {
     if (domain !== 'ground') return 1;
-    if (this.road[y * this.w + x]) return ROAD_COST;
+    if (this.road[y * this.w + x] || this.bridge[y * this.w + x]) return ROAD_COST;
     const t = this.get(x, y);
     if (t === Terrain.FOREST) return 1.8;
     if (t === Terrain.SAND) return 1.2;
@@ -102,7 +115,7 @@ export class GameMap {
     if (coastal) {
       for (let y = ty - 1; y <= ty + h && !touchesWater; y++) {
         for (let x = tx - 1; x <= tx + w; x++) {
-          if (this.inBounds(x, y) && this.isWater(x, y)) { touchesWater = true; break; }
+          if (this.isOpenSea(x, y)) { touchesWater = true; break; }
         }
       }
       if (!touchesWater) return false;
@@ -161,7 +174,8 @@ export function generateMap(seed, w = 96, h = 96) {
     }
   }
 
-  // Land bridges across the channel so ground armies can meet.
+  // Bridges across the channel so ground armies can meet. Water under them
+  // stays water, so ships can still sail through.
   const bridges = [0.3, 0.5, 0.7];
   for (const b of bridges) {
     const cx = Math.round(w * b), cy = Math.round(h * (1 - b));
@@ -169,7 +183,9 @@ export function generateMap(seed, w = 96, h = 96) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const x = cx + i + dx, y = cy + i + dy;
-          if (map.inBounds(x, y) && (map.isWater(x, y) || map.get(x, y) === Terrain.ROCK)) map.tiles[y * w + x] = Terrain.SAND;
+          if (!map.inBounds(x, y)) continue;
+          if (map.isWater(x, y)) map.bridge[y * w + x] = 1;
+          else if (map.get(x, y) === Terrain.ROCK) map.tiles[y * w + x] = Terrain.SAND;
         }
       }
     }
@@ -208,8 +224,147 @@ export function generateMap(seed, w = 96, h = 96) {
     map.tiles[p.y * w + p.x] = Terrain.GRASS;
     map.wells.push({ x: p.x, y: p.y, amount: OIL_PER_WELL });
   }
+  // Later passes (wells, base clearings) may have filled some bridged water.
+  for (let i = 0; i < w * h; i++) if (map.bridge[i] && !map.isWater(i % w, Math.floor(i / w))) map.bridge[i] = 0;
+  labelWaterRegions(map);
+  digCanals(map, starts);
   placeProps(map, rng);
   return map;
+}
+
+// Join every sizeable pond to the main sea with a short two-tile canal, so
+// ships built on any decent stretch of water can reach open sea. Canals
+// avoid bases and wells, and are bridged wherever they cross the road.
+const MIN_POND = 20; // smaller puddles are left alone
+const MAX_CANAL = 24; // longest canal (in land tiles) worth digging
+const CANAL_CROSSING = 5; // a bridge across the canal every this many tiles
+
+function digCanals(map, starts) {
+  const { w, h } = map;
+  // The carved road is two tiles wide (each path tile plus its +x/+y neighbours).
+  const roadTiles = new Set();
+  for (const p of map.roads.flat()) for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) roadTiles.add((p.y + dy) * w + p.x + dx);
+  for (let pass = 0; pass < 12; pass++) {
+    const sizes = map.waterRegionSize;
+    let main = 0;
+    for (let r = 1; r < sizes.length; r++) if (sizes[r] > sizes[main]) main = r;
+    const target = sizes.findIndex((n, r) => r !== main && n >= MIN_POND && !map.canalTried?.has(r));
+    if (target < 0) return;
+    (map.canalTried ||= new Set()).add(target);
+    const path = canalPath(map, main, target, starts);
+    if (!path) continue;
+    const before = groundReach(map, starts[0]);
+    const dug = [];
+    path.forEach((i, k) => {
+      // A crossing every few tiles keeps the land on either side connected.
+      const crossing = k % CANAL_CROSSING === Math.floor(CANAL_CROSSING / 2);
+      for (const j of [i, i + 1]) {
+        const x = j % w, y = Math.floor(j / w);
+        if (!map.inBounds(x, y) || map.isWater(x, y) || map.occupied[j]) continue;
+        if (map.wells.some((wl) => wl.x === x && wl.y === y)) continue;
+        map.tiles[j] = Terrain.WATER;
+        dug.push(j);
+        if (crossing || roadTiles.has(j)) map.bridge[j] = 1;
+      }
+    });
+    // Never strand a well that the bases could reach before: if the canal
+    // did, bridge it end to end (ships still pass underneath).
+    const after = groundReach(map, starts[0]);
+    if (map.wells.some((wl) => before[wl.y * w + wl.x] && !after[wl.y * w + wl.x])) for (const j of dug) map.bridge[j] = 1;
+    // Relabel after each canal; ids change, so forget which were tried.
+    map.waterRegion.fill(-1);
+    map.waterRegionSize = [];
+    map.canalTried = null;
+    labelWaterRegions(map);
+  }
+}
+
+// Tiles a ground unit can reach from `start` (4-connected flood fill).
+function groundReach(map, start) {
+  const { w } = map;
+  const seen = new Uint8Array(w * map.h);
+  const first = (start.y + 3) * w + start.x;
+  const stack = [first];
+  seen[first] = 1;
+  while (stack.length) {
+    const c = stack.pop();
+    const x = c % w, y = (c - x) / w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy, i = ny * w + nx;
+      if (map.inBounds(nx, ny) && !seen[i] && (map.isLand(nx, ny) || map.bridge[i])) { seen[i] = 1; stack.push(i); }
+    }
+  }
+  return seen;
+}
+
+// Cheapest 4-connected route of land from the main sea to a target body.
+function canalPath(map, main, target, starts) {
+  const { w, h } = map;
+  const n = w * h;
+  const dist = new Float64Array(n).fill(Infinity);
+  const prev = new Int32Array(n).fill(-1);
+  const landSteps = new Int32Array(n);
+  const heap = [];
+  const push = (i, d) => { heap.push([d, i]); let k = heap.length - 1; while (k > 0) { const p = (k - 1) >> 1; if (heap[p][0] <= heap[k][0]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; } };
+  const pop = () => { const top = heap[0]; const last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { let c = 2 * k + 1; if (c >= heap.length) break; if (c + 1 < heap.length && heap[c + 1][0] < heap[c][0]) c++; if (heap[c][0] >= heap[k][0]) break; [heap[c], heap[k]] = [heap[k], heap[c]]; k = c; } } return top; };
+  for (let i = 0; i < n; i++) if (map.waterRegion[i] === main) { dist[i] = 0; push(i, 0); }
+  const blocked = (x, y) => starts.some((s) => Math.hypot(s.x - x, s.y - y) < 9)
+    || map.wells.some((wl) => Math.abs(wl.x - x) <= 1 && Math.abs(wl.y - y) <= 1)
+    || map.occupied[y * w + x] !== 0;
+  while (heap.length) {
+    const [d, i] = pop();
+    if (d > dist[i]) continue;
+    if (map.waterRegion[i] === target) {
+      const path = [];
+      for (let c = i; c >= 0 && map.waterRegion[c] !== main; c = prev[c]) if (!map.isWater(c % w, Math.floor(c / w))) path.push(c);
+      return path;
+    }
+    const x = i % w, y = (i - x) / w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 1 || ny < 1 || nx >= w - 2 || ny >= h - 2) continue;
+      const j = ny * w + nx;
+      const water = map.isWater(nx, ny);
+      if (!water && blocked(nx, ny)) continue;
+      const steps = landSteps[i] + (water ? 0 : 1);
+      if (steps > MAX_CANAL) continue;
+      const t = map.get(nx, ny);
+      const cost = water ? 1 : t === Terrain.ROCK ? 14 : 5;
+      if (d + cost < dist[j]) { dist[j] = d + cost; prev[j] = i; landSteps[j] = steps; push(j, d + cost); }
+    }
+  }
+  return null;
+}
+
+// Flood-fill navigable water into connected bodies (same movement rules as
+// ship pathfinding), so placement can tell the open sea from a pond.
+export const MIN_SEA = 150; // tiles of water a Naval Yard needs to be useful
+
+function labelWaterRegions(map) {
+  const { w, h } = map;
+  const ok = (x, y) => map.inBounds(x, y) && map.isWater(x, y);
+  for (let s = 0; s < w * h; s++) {
+    if (map.waterRegion[s] >= 0 || !ok(s % w, Math.floor(s / w))) continue;
+    const r = map.waterRegionSize.length;
+    let n = 0;
+    const stack = [s];
+    map.waterRegion[s] = r;
+    while (stack.length) {
+      const c = stack.pop();
+      n++;
+      const cx = c % w, cy = (c - cx) / w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const nx = cx + dx, ny = cy + dy;
+        if (!ok(nx, ny)) continue;
+        if (dx && dy && (!ok(cx + dx, cy) || !ok(cx, cy + dy))) continue;
+        const ni = ny * w + nx;
+        if (map.waterRegion[ni] >= 0) continue;
+        map.waterRegion[ni] = r;
+        stack.push(ni);
+      }
+    }
+    map.waterRegionSize.push(n);
+  }
 }
 
 // Civilian scenery: farmsteads and windmills on open grassland, mirrored for
@@ -270,7 +425,7 @@ function carveRoad(map, a, b) {
     w: map.w,
     h: map.h,
     passable: (x, y) => map.inBounds(x, y),
-    moveCost: (x, y) => (map.isLand(x, y) ? 1 : 8),
+    moveCost: (x, y) => (map.isLand(x, y) || map.bridge[y * map.w + x] ? 1 : 8),
   };
   const path = findPath(costMap, a.x, a.y, b.x, b.y, 'ground', map.w * map.h * 4, false);
   if (!path) return null;
@@ -279,8 +434,9 @@ function carveRoad(map, a, b) {
       for (let dx = 0; dx <= 1; dx++) {
         const x = p.x + dx, y = p.y + dy;
         if (!map.inBounds(x, y)) continue;
-        // Water and rock become a causeway; forest along the road is cleared.
-        if (!map.isLand(x, y)) map.tiles[y * map.w + x] = Terrain.SAND;
+        // Water is bridged, rock is cut through, forest along the road is cleared.
+        if (map.isWater(x, y)) map.bridge[y * map.w + x] = 1;
+        else if (!map.isLand(x, y)) map.tiles[y * map.w + x] = Terrain.SAND;
         else if (map.get(x, y) === Terrain.FOREST) map.tiles[y * map.w + x] = Terrain.GRASS;
       }
     }

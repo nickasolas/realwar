@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateMap } from '../src/map.js';
-import { HeightField } from '../src/gfx/heightfield.js';
+import { HeightField, DECK_LEVEL } from '../src/gfx/heightfield.js';
 import { Terrain } from '../src/config.js';
 
 test('terrain relief keeps water low and mountains high', () => {
@@ -20,4 +20,17 @@ test('terrain relief keeps water low and mountains high', () => {
   if (rockN) assert.ok(rockSum / rockN > 1.5);
   assert.ok(landBelow / landN < 0.02, 'grass is almost never under water');
   assert.ok(hf.groundAt(0, 0) > 0);
+});
+
+test('ground units ride on bridge decks above the water', () => {
+  const m = generateMap(1);
+  const hf = new HeightField(m, 1);
+  let checked = 0;
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    if (!m.bridge[y * m.w + x]) continue;
+    const g = hf.groundAt(x + 0.5, y + 0.5);
+    assert.ok(g > 0.05 && g <= DECK_LEVEL + 0.01, `deck at ${x},${y} is ${g}`);
+    checked++;
+  }
+  assert.ok(checked > 0);
 });

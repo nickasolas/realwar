@@ -33,7 +33,7 @@ npm start            # http://localhost:8080
   Center or Supply Depot. Wells run dry, so expansion matters.
 - **Base building:** Structures are placed from the sidebar within range of your
   base, one at a time. Tech tree: Command Center → Barracks → Vehicle Plant →
-  Airbase / Service Depot; Barracks → Naval Yard (shoreline only); plus Gun Turrets and SAM Sites.
+  Airbase / Service Depot; Barracks → Naval Yard (on the open-sea shoreline; ponds don't count); plus Gun Turrets and SAM Sites.
 - **Units:** Recon Drones (unarmed, long-sight scouts from the Command Center), Rifle Squads, Rocket Teams, Scout Buggies, Battle Tanks, Flak
   Tracks, Howitzers, Attack Helicopters, Interceptors, Strike Bombers, Patrol
   Boats and Missile Cruisers. Weapons only hit certain domains (ground/naval/air)
@@ -85,7 +85,7 @@ ambient occlusion, bloom and tilt-shift).
 | File | Role |
 | --- | --- |
 | `src/config.js` | All balance data: units, structures, weapons, armor modifiers |
-| `src/map.js` | Seeded, point-symmetric map generator (sea channel, land bridges, oil) |
+| `src/map.js` | Seeded, point-symmetric map generator (sea channel, bridges ships sail under, canals joining ponds to the sea, oil) |
 | `src/path.js` | A* pathfinding per movement domain with path smoothing |
 | `src/sim.js` | Deterministic fixed-step simulation (20 ticks/s) and the command API |
 | `src/ai.js` | Computer opponent; uses the same commands as the player |
@@ -95,6 +95,7 @@ ambient occlusion, bloom and tilt-shift).
 | `src/gfx/modelkit.js` | Model toolkit: surface shader (camo paint, concrete, corrugated metal, canvas, track links, glass), geometry helpers |
 | `src/gfx/units.js` | Unit models: tracked armour, wheeled vehicles, infantry, aircraft, ships |
 | `src/gfx/structures.js` | Structure, scenery and oil-well models |
+| `src/gfx/bridges.js` | Bridge decks, parapets and piers over bridged water |
 | `src/gfx/particles.js` | Point-sprite particles: explosions, smoke, fire, dust, wakes, tracers |
 | `src/gfx/renderer3d.js` | Scene, camera, lighting, post-processing, picking, overlays, minimap, icons |
 | `src/audio.js` | Procedurally synthesized sound effects (WebAudio) |
