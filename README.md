@@ -37,10 +37,17 @@ npm start            # http://localhost:8080
     a corner each of a map split into quarters, with roads around the ring.
   - *Islands*: every base has its own island, with oil and a shoreline close
     by, and there's no land route to any enemy. Win with warships, aircraft,
-    paratroopers and missiles. Ground forces defend.
+    paratroopers, missiles and amphibious landings.
   Every map is symmetric, so each start is equally fair. The computer reads
-  the map: on islands it builds its fleet and air force first and keeps a
-  small ground garrison; with several enemies it goes after the nearest.
+  the map: on islands it builds its fleet and air force first, then ferries
+  assault groups across in landing craft. With several enemies it goes after
+  the nearest.
+- **Landing Craft** (Naval Yard, $700) carry 8 slots of ground troops
+  (infantry 1, vehicles 2). Select units and right-click the craft to board;
+  it comes to the nearest shore to pick them up. With the craft selected,
+  right-click land to sail to the closest beach and put the troops ashore
+  (armed ones attack-move on to the spot you clicked), or press **U** to
+  unload where it is. Anyone aboard is lost if it sinks.
 
 - **Economy:** Supply Trucks pump oil from wells and haul it to a Command
   Center or Supply Depot. Wells run dry, so expansion matters. A standing
@@ -86,8 +93,9 @@ npm start            # http://localhost:8080
     demolition charges that wreck structures.
   - *Attack Drones* (60): fast, cheap armed drones from the Airbase.
   - *Advanced Optics* (50): every unit sees 2 tiles further.
-  - *Submarines* (90): Naval Yard attack subs that torpedo ships and stay
-    hidden unless an enemy is within a few tiles, or for a moment after they
+  - *Submarines* (90): Naval Yard attack subs that torpedo ships, fire
+    cruise missiles at land units and structures within 11 tiles, and stay
+    hidden unless an enemy is within a few tiles or for a moment after they
     fire. Patrol Boats and Missile Cruisers have sonar that reaches further.
   - *Airborne Infantry* (90): Paratroopers from the Airbase. A transport flies
     to the Airbase's rally point and drops four squads, then flies home.
@@ -111,6 +119,7 @@ npm start            # http://localhost:8080
 | S / H | Stop / jump to HQ |
 | R | Repair selected structure, or send selected units for repairs |
 | L | Launch a charged ICBM Silo (then click the target) |
+| U | Unload the selected landing craft where it is |
 | Ctrl+1–9, 1–9 | Assign / recall group (press twice to center) |
 | Arrows, screen edge, middle-drag, wheel | Scroll and zoom |
 | P, +/-, M, Del | Pause, game speed, mute, sell structure |

@@ -426,6 +426,32 @@ function submarine(p) {
   p.light(0.01, '#ff3030', { x: 0.13, y: 0.22 });
 }
 
+// Landing craft (LCU style): flat open well deck between high sides, a bow
+// ramp, and a wheelhouse aft.
+function lander(p) {
+  const hullC = '#7d8589';
+  p.box(1.3, 0.12, 0.56, hullC, { y: -0.02 });
+  p.box(1.3, 0.025, 0.58, '#3a2a26', { y: -0.06 }); // waterline stripe
+  p.box(1.0, 0.01, 0.46, '#5d6468', { x: 0.08, y: 0.045 }); // well deck
+  for (const s of [-1, 1]) p.box(1.3, 0.12, 0.04, hullC, { y: 0.1, z: s * 0.26 });
+  // Bow ramp, raised.
+  p.box(0.04, 0.2, 0.5, '#6d7478', { x: 0.64, y: 0.12, rz: -0.12 });
+  for (let i = 0; i < 4; i++) p.box(0.012, 0.012, 0.48, '#505659', { x: 0.655, y: 0.05 + i * 0.045, rz: -0.12 });
+  // Wheelhouse and mast at the stern.
+  p.cbox(0.22, 0.2, 0.44, '#a7aeb2', { x: -0.52, y: 0.2 }, 0.012);
+  p.cbox(0.16, 0.1, 0.36, '#a7aeb2', { x: -0.5, y: 0.35 }, 0.01);
+  p.box(0.004, 0.04, 0.3, C.glass, { x: -0.419, y: 0.36, surf: 'glass' });
+  p.rod([-0.55, 0.4, 0], [-0.55, 0.62, 0], 0.007, '#5b6166');
+  p.box(0.12, 0.006, 0.44, 'team', { x: -0.52, y: 0.302 });
+  p.light(0.012, '#ff3030', { x: -0.55, y: 0.63 });
+}
+
+// Tarp-covered vehicle silhouette, shown on deck for each load carried.
+function landerCargo(p) {
+  p.cbox(0.26, 0.1, 0.18, '#4f5536', { y: 0.1, surf: 'canvas' }, 0.02);
+  p.box(0.14, 0.05, 0.12, '#454a2f', { x: -0.02, y: 0.17, surf: 'canvas' });
+}
+
 // C-130 style transport: high wing, four turboprops, raised tail.
 function transport(p) {
   p.cyl(0.11, 0.11, 1.1, 'body', { x: 0.0, y: 0.0, rz: PI / 2 }, 16);
@@ -471,6 +497,7 @@ const BUILDERS = {
   strikedrone: { body: strikedrone },
   submarine: { body: submarine },
   paratroopers: { body: transport },
+  lander: { body: lander },
 };
 
 export function buildUnit(type, owner) {
@@ -523,6 +550,15 @@ export function buildUnit(type, owner) {
       root.add(pr);
       return pr;
     });
+  }
+  if (type === 'lander') {
+    parts.cargo = [0.42, 0.14, -0.14].flatMap((x) => [-0.11, 0.11].map((z) => {
+      const c = cached(key + ':c', team, landerCargo);
+      c.position.set(x, 0.0, z);
+      c.visible = false;
+      root.add(c);
+      return c;
+    }));
   }
   if (type === 'para') {
     parts.chute = cached(key + ':c', team, parachute);

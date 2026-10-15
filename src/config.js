@@ -63,6 +63,8 @@ export const WEAPONS = {
   specops: { damage: 24, range: 6.5, cooldown: 1.2, speed: 30, hits: ['ground', 'naval'], vs: { infantry: 1.6, light: 0.8, heavy: 0.45, building: 1.6, ship: 0.5 }, fx: 'bullet' },
   drone_missile: { damage: 22, range: 4.5, cooldown: 1.4, speed: 18, hits: ['ground', 'naval'], vs: { infantry: 0.9, light: 1.3, heavy: 0.9, building: 0.6, ship: 0.9 }, fx: 'rocket' },
   torpedo: { damage: 90, range: 6, cooldown: 3.2, speed: 8, hits: ['naval'], vs: { ship: 1.2 }, fx: 'torpedo' },
+  // Submarine-launched cruise missiles for targets ashore.
+  sub_missile: { damage: 70, range: 11, minRange: 2, cooldown: 7.0, speed: 10, splash: 1.2, arc: true, hits: ['ground'], vs: { infantry: 0.8, light: 1.0, heavy: 0.9, building: 1.4 }, fx: 'artillery' },
   icbm: { damage: 1100, range: Infinity, cooldown: 0, speed: 7, splash: 3.5, arc: true, arcHeight: 12, hits: ['ground', 'naval'], vs: { infantry: 1.0, light: 1.0, heavy: 0.8, building: 1.2, ship: 1.0 }, fx: 'icbm' },
 };
 
@@ -87,7 +89,10 @@ export const UNITS = {
   strikedrone: { name: 'Attack Drone', domain: 'air', armor: 'air', hp: 130, speed: 6.0, sight: 9, cost: 650, buildTime: 9, radius: 0.35, weapon: 'drone_missile', tech: 'attackdrone' },
   // Hidden from enemies unless one of their units or structures is within
   // `stealth` tiles (or `sonar` range), or for a moment after it fires.
-  submarine: { name: 'Attack Submarine', domain: 'naval', armor: 'ship', hp: 600, speed: 2.8, sight: 7, cost: 1300, buildTime: 16, radius: 0.6, weapon: 'torpedo', stealth: 2.5, tech: 'submarine' },
+  submarine: { name: 'Attack Submarine', domain: 'naval', armor: 'ship', hp: 600, speed: 2.8, sight: 7, cost: 1300, buildTime: 16, radius: 0.6, weapon: 'torpedo', secondary: 'sub_missile', stealth: 2.5, tech: 'submarine' },
+  // Carries ground units across water: `capacity` slots, infantry take 1,
+  // vehicles 2 (see cargoSize in sim.js).
+  lander: { name: 'Landing Craft', domain: 'naval', armor: 'ship', hp: 520, speed: 3.0, sight: 6, cost: 700, buildTime: 10, radius: 0.65, capacity: 8 },
   // A transport that flies to the Airbase's rally point (the drop zone) and
   // drops `drop.count` squads of `drop.unit`, then flies home.
   paratroopers: { name: 'Paratroopers', domain: 'air', armor: 'air', hp: 320, speed: 5.0, sight: 7, cost: 1100, buildTime: 14, radius: 0.7, transport: true, drop: { unit: 'para', count: 4 }, tech: 'airborne' },
@@ -118,7 +123,7 @@ export const BUILDINGS = {
   barracks: { name: 'Barracks', w: 2, h: 2, hp: 900, sight: 5, cost: 500, buildTime: 10, produces: ['infantry', 'rocketeer', 'commando'], requires: ['hq'], healsInfantry: true },
   factory: { name: 'Vehicle Plant', w: 3, h: 3, hp: 1500, sight: 5, cost: 1500, buildTime: 18, produces: ['scout', 'tank', 'aa', 'artillery', 'truck'], requires: ['barracks'] },
   airfield: { name: 'Airbase', w: 6, h: 2, hp: 1300, sight: 6, cost: 2000, buildTime: 22, produces: ['heli', 'fighter', 'bomber', 'strikedrone', 'paratroopers'], requires: ['factory'], repairs: 'air' },
-  shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'destroyer', 'submarine'], requires: ['barracks'], coastal: true, repairs: 'naval' },
+  shipyard: { name: 'Naval Yard', w: 3, h: 3, hp: 1400, sight: 6, cost: 1500, buildTime: 18, produces: ['gunboat', 'lander', 'destroyer', 'submarine'], requires: ['barracks'], coastal: true, repairs: 'naval' },
   // Fortifications: placed in lines, built in parallel with other construction,
   // and ignored for victory. Gates let their owner's ground units through.
   wall: { name: 'Wall', w: 1, h: 1, hp: 700, sight: 2, cost: 40, buildTime: 2, requires: ['hq'], segment: true },

@@ -10,13 +10,15 @@ const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'depot', 'shipy
 // first and ground forces only defend.
 const NAVAL_PLAN = ['refinery', 'barracks', 'factory', 'shipyard', 'turret', 'airfield', 'samsite', 'shipyard', 'depot', 'lab', 'refinery', 'samsite', 'turret', 'silo'];
 const GROUND_GARRISON = 10; // most ground units kept when they can't reach the enemy
+const MAX_LANDERS = 2; // landing craft kept for amphibious assaults (island maps only)
+const ASSAULT_MIN = 6; // idle troops needed before a landing craft loads up
 
 // Production rotations; units that still need research are skipped.
 const ARMY_MIX = {
   barracks: ['infantry', 'infantry', 'rocketeer', 'commando'],
   factory: ['tank', 'tank', 'scout', 'aa', 'artillery'],
   airfield: ['heli', 'strikedrone', 'fighter', 'paratroopers', 'heli', 'bomber'],
-  shipyard: ['submarine', 'gunboat', 'gunboat', 'destroyer'],
+  shipyard: ['submarine', 'gunboat', 'lander', 'gunboat', 'destroyer'],
 };
 
 // wallAfter: how many build-plan steps must be done before the AI starts
@@ -129,6 +131,7 @@ export class AIController {
     this.manageConstruction();
     this.manageProduction();
     this.manageStrategic();
+    if (!this.overland) this.manageAmphibious();
     this.manageRepairs();
     this.manageArmy();
     this.manageScouting();
@@ -380,11 +383,15 @@ export class AIController {
     // empty factory for long.
     const reserve = this.savingFor || (this.wallsPending ? WALL_RESERVE : 0);
     const ground = this.overland ? 0 : this.mine((e) => e.kind === 'unit' && e.def.domain === 'ground' && !e.def.harvester).length;
+    // Each landing craft justifies a boatload more troops.
+    const garrison = GROUND_GARRISON + this.mine((e) => e.def.capacity).length * 8;
     for (const b of producers) {
-      if (!this.overland && (b.type === 'barracks' || b.type === 'factory') && ground >= GROUND_GARRISON) continue;
+      if (!this.overland && (b.type === 'barracks' || b.type === 'factory') && ground >= garrison) continue;
       if (b.queue.length >= (reserve ? 1 : 2)) continue;
       if (reserve && b.queue.length === 0 && this.game.time % 20 > this.cfg.thinkEvery) continue;
-      const mix = ARMY_MIX[b.type].filter((t) => g.unitAvailable(this.id, t));
+      // Landing craft only matter when the enemy can't be reached on foot.
+      const landers = this.mine((e) => e.def.capacity).length;
+      const mix = ARMY_MIX[b.type].filter((t) => g.unitAvailable(this.id, t) && (!UNITS[t].capacity || (!this.overland && landers < MAX_LANDERS)));
       const i = this.mixIndex[b.id] || 0;
       const type = mix[i % mix.length];
       if (this.player.credits - UNITS[type].cost < reserve) {
@@ -443,8 +450,56 @@ export class AIController {
       for (const pb of this.mine((e) => e.kind === 'building' && e.def.produces && e.type !== 'hq' && e.type !== 'shipyard')) {
         if (!pb.rally || Math.hypot(pb.rally.x - rx, pb.rally.y - ry) > 2) g.cmdRally(this.id, pb.id, rx, ry);
       }
-      const stray = ready.filter((u) => u.def.domain !== 'naval' && Math.hypot(u.x - rx, u.y - ry) > 5);
+      const stray = ready.filter((u) => u.def.domain !== 'naval' && (u.def.domain !== 'ground' || this.canWalkTo(u.x, u.y)) && Math.hypot(u.x - rx, u.y - ry) > 5);
       if (stray.length) g.cmdMove(this.id, stray.map((u) => u.id), rx, ry);
+    }
+  }
+
+  // Island warfare: fill a landing craft with idle troops at home, sail it to
+  // the nearest enemy, put them ashore, then bring it back for more.
+  manageAmphibious() {
+    const g = this.game;
+    const home = g.map.starts[this.id];
+    for (const l of this.mine((e) => e.def.capacity)) {
+      if (l.order.type !== 'idle') continue;
+      const aboard = l.passengers?.length || 0;
+      if (aboard) {
+        const pending = this.mine((e) => e.kind === 'unit' && e.order.type === 'board' && e.order.landerId === l.id).length;
+        const full = g.load(l) >= l.def.capacity - 1;
+        if (full || !pending || g.time - (l.aiLoadAt ?? 0) > 45) {
+          const t = this.pickTarget();
+          if (t && g.cmdUnload(this.id, [l.id], t.x, t.y)) l.aiSailing = true;
+        }
+      } else if (l.aiSailing) {
+        // Delivered: head home.
+        l.aiSailing = false;
+        const beach = g.beachNear(l, home.x, home.y, 30);
+        if (beach) { l.order = { type: 'move' }; g.setPath(l, beach.x, beach.y); }
+      } else {
+        const troops = this.mine((e) => e.kind === 'unit' && e.def.domain === 'ground' && e.def.weapon && e.order.type === 'idle'
+          && !(e.dropT > 0) && this.canWalkTo(e.x, e.y) && Math.hypot(e.x - home.x, e.y - home.y) < 30);
+        if (troops.length < ASSAULT_MIN) continue;
+        troops.sort((a, b) => Math.hypot(a.x - l.x, a.y - l.y) - Math.hypot(b.x - l.x, b.y - l.y));
+        const pick = [];
+        let slots = 0;
+        for (const u of troops) {
+          const size = u.def.armor === 'infantry' ? 1 : 2;
+          if (slots + size > l.def.capacity) continue;
+          pick.push(u.id); slots += size;
+        }
+        if (g.cmdBoard(this.id, pick, l.id)) l.aiLoadAt = g.time;
+      }
+    }
+    // Troops landed on an enemy island fight their way to the nearest structure.
+    const ashore = this.mine((e) => e.kind === 'unit' && e.def.domain === 'ground' && e.def.weapon && e.order.type === 'idle' && !this.canWalkTo(e.x, e.y));
+    if (ashore.length) {
+      let best = null, bestD = Infinity;
+      for (const e of g.entities.values()) {
+        if (e.owner === this.id || e.kind !== 'building' || e.def.segment) continue;
+        const d = Math.hypot(e.x - ashore[0].x, e.y - ashore[0].y);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (best) g.cmdMove(this.id, ashore.map((u) => u.id), best.x, best.y, true);
     }
   }
 

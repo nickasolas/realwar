@@ -21,6 +21,12 @@ export function damageAgainst(weapon, armor) {
   return weapon.damage * (weapon.vs?.[armor] ?? 1);
 }
 
+// Landing-craft slots a unit takes up; trucks and non-ground units can't board.
+export function cargoSize(u) {
+  if (u.def.domain !== 'ground' || u.def.harvester) return 0;
+  return u.def.armor === 'infantry' ? 1 : 2;
+}
+
 export function canHit(weapon, target) {
   const domain = target.kind === 'building' ? 'ground' : target.def.domain;
   return weapon.hits.includes(domain);
@@ -177,6 +183,110 @@ export class Game {
     });
     this.events.push({ type: 'launch', owner: playerId, x: b.x, y: b.y, tx: x, ty: y });
     return true;
+  }
+
+  // ----------------------------------------------------- landing craft
+
+  // Order ground units aboard a landing craft. The craft (if idle) heads for
+  // the shore nearest the troops.
+  cmdBoard(playerId, ids, landerId) {
+    const l = this.get(landerId);
+    if (!l || l.owner !== playerId || !l.def.capacity) return false;
+    const units = this.ownedUnits(playerId, ids).filter((u) => cargoSize(u) > 0);
+    if (!units.length) return false;
+    for (const u of units) {
+      u.order = { type: 'board', landerId };
+      u.target = null; u.harvestState = null; u.pendingPath = null;
+      this.setPath(u, l.x, l.y);
+    }
+    if (l.order.type === 'idle' && !this.nearShore(l)) {
+      const cx = units.reduce((a, u) => a + u.x, 0) / units.length, cy = units.reduce((a, u) => a + u.y, 0) / units.length;
+      const beach = this.beachNear(l, cx, cy);
+      if (beach) { l.order = { type: 'move' }; this.setPath(l, beach.x, beach.y); }
+    }
+    return true;
+  }
+
+  // Sail to the beach nearest (x, y), put the troops ashore and send them on
+  // to (x, y). Unloads on the spot when (x, y) is omitted.
+  cmdUnload(playerId, landerIds, x, y) {
+    let n = 0;
+    for (const id of landerIds) {
+      const l = this.get(id);
+      if (!l || l.owner !== playerId || !l.def.capacity || !l.passengers?.length) continue;
+      const tx = x ?? l.x, ty = y ?? l.y;
+      const beach = x == null ? (this.nearShore(l) ? { x: l.x, y: l.y } : this.beachNear(l, l.x, l.y)) : this.beachNear(l, tx, ty);
+      if (!beach) continue;
+      l.order = { type: 'unload', x: tx, y: ty, beach };
+      this.setPath(l, beach.x, beach.y);
+      n++;
+    }
+    return n > 0;
+  }
+
+  load(l) { return (l.passengers || []).reduce((a, u) => a + cargoSize(u), 0); }
+
+  // Is there land within reach of the craft's ramp?
+  nearShore(l) {
+    const cx = Math.floor(l.x), cy = Math.floor(l.y);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (this.map.passable(cx + dx, cy + dy, 'ground')) return true;
+    return false;
+  }
+
+  // The open-water tile on the craft's own sea, touching land, closest to (x, y).
+  beachNear(l, x, y, radius = 18) {
+    const m = this.map;
+    const region = m.waterRegion[Math.floor(l.y) * m.w + Math.floor(l.x)];
+    let best = null, bestD = Infinity;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    for (let ty = y0 - radius; ty <= y0 + radius; ty++) {
+      for (let tx = x0 - radius; tx <= x0 + radius; tx++) {
+        if (!m.passable(tx, ty, 'naval') || m.waterRegion[ty * m.w + tx] !== region) continue;
+        const d = Math.hypot(tx + 0.5 - x, ty + 0.5 - y);
+        if (d >= bestD) continue;
+        let shore = false;
+        for (let dy = -1; dy <= 1 && !shore; dy++) for (let dx = -1; dx <= 1; dx++) if (m.passable(tx + dx, ty + dy, 'ground')) { shore = true; break; }
+        if (shore) { bestD = d; best = { x: tx + 0.5, y: ty + 0.5 }; }
+      }
+    }
+    return best;
+  }
+
+  // A boarding unit: walk to the craft and step aboard once alongside.
+  updateBoarding(u) {
+    const l = this.get(u.order.landerId);
+    if (!l || this.load(l) + cargoSize(u) > l.def.capacity) { u.order = { type: 'idle' }; u.path = null; return; }
+    if (this.distTo(u, l) <= 1.3) {
+      (l.passengers ||= []).push(u);
+      this.entities.delete(u.id);
+      u.order = { type: 'idle' }; u.path = null; u.target = null;
+      this.events.push({ type: 'boarded', owner: u.owner, landerId: l.id, x: l.x, y: l.y });
+      return;
+    }
+    this.moveToward(u, l.x, l.y);
+  }
+
+  // Put everyone ashore around the craft; armed troops attack-move on to
+  // (x, y). Returns how many landed.
+  disembark(l, x, y) {
+    const landed = [];
+    const keep = [];
+    (l.passengers || []).forEach((u, i) => {
+      const a = i * 2.39996, r = 1 + Math.sqrt(i) * 0.6;
+      const spot = nearestPassable(this.map, Math.floor(l.x + Math.cos(a) * r), Math.floor(l.y + Math.sin(a) * r), 'ground', 4, u.owner);
+      if (!spot) { keep.push(u); return; }
+      u.x = u.px = spot.x + 0.5; u.y = u.py = spot.y + 0.5;
+      u.path = null; u.order = { type: 'idle', home: { x: u.x, y: u.y } };
+      this.entities.set(u.id, u);
+      landed.push(u);
+    });
+    l.passengers = keep;
+    const armed = landed.filter((u) => u.def.weapon).map((u) => u.id);
+    const rest = landed.filter((u) => !u.def.weapon).map((u) => u.id);
+    if (armed.length) this.cmdMove(l.owner, armed, x, y, true);
+    if (rest.length) this.cmdMove(l.owner, rest, x, y);
+    if (landed.length) this.events.push({ type: 'landed', owner: l.owner, x: l.x, y: l.y, count: landed.length });
+    return landed.length;
   }
 
   // Re-aim a transport that hasn't dropped its troops yet.
@@ -621,9 +731,12 @@ export class Game {
       const p = this.players[e.owner];
       if (p.constructing === e.id) p.constructing = null;
     }
+    // Troops aboard a sunk landing craft go down with it.
+    const lost = 1 + (e.passengers?.length || 0);
+    if (e.passengers) e.passengers = [];
     if (!sold) {
-      this.players[e.owner].stats.lost++;
-      if (killerOwner != null && killerOwner !== e.owner) this.players[killerOwner].stats.killed++;
+      this.players[e.owner].stats.lost += lost;
+      if (killerOwner != null && killerOwner !== e.owner) this.players[killerOwner].stats.killed += lost;
     }
     this.events.push({
       type: 'explode', x: e.x, y: e.y,
@@ -751,6 +864,15 @@ export class Game {
         break;
       case 'paradrop':
         this.updateTransport(u);
+        break;
+      case 'board':
+        this.updateBoarding(u);
+        break;
+      case 'unload':
+        if (this.followPath(u) || Math.hypot(u.x - u.order.beach.x, u.y - u.order.beach.y) < 0.8) {
+          this.disembark(u, u.order.x, u.order.y);
+          u.order = { type: 'idle' };
+        }
         break;
     }
   }

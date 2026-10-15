@@ -20,7 +20,7 @@ const DECAL_FADE = 8; // seconds spent fading out at the end
 const SUN_DIR = new THREE.Vector3(-0.55, 1.0, -0.42).normalize();
 const AIR_ALT = { drone: 3.4, heli: 1.9, fighter: 2.9, bomber: 3.2, strikedrone: 2.6, paratroopers: 3.6 };
 // Units are drawn larger than their footprint so they read at strategy zoom.
-const UNIT_SCALE = { commando: 1.35, para: 1.35, strikedrone: 1.25, submarine: 1.15, paratroopers: 1.35, drone: 1.4, infantry: 1.35, rocketeer: 1.35, truck: 1.15, scout: 1.15, tank: 1.15, aa: 1.15, artillery: 1.1, heli: 1.15, fighter: 1.05, bomber: 0.9, gunboat: 1.1, destroyer: 1.05 };
+const UNIT_SCALE = { lander: 1.15, commando: 1.35, para: 1.35, strikedrone: 1.25, submarine: 1.15, paratroopers: 1.35, drone: 1.4, infantry: 1.35, rocketeer: 1.35, truck: 1.15, scout: 1.15, tank: 1.15, aa: 1.15, artillery: 1.1, heli: 1.15, fighter: 1.05, bomber: 0.9, gunboat: 1.1, destroyer: 1.05 };
 
 export class Renderer3D {
   constructor(canvas, overlay, game, viewer = 0, quality = 'high') {
@@ -599,6 +599,11 @@ export class Renderer3D {
       }
     } else if (domain === 'naval') {
       const draft = e.def.stealth ? -0.07 : 0; // submarines run low in the water
+      if (v.parts.cargo) {
+        // One tarp bundle per two slots in use.
+        const shown = Math.ceil(this.game.load(e) / 2);
+        v.parts.cargo.forEach((c, i) => { c.visible = i < shown; });
+      }
       r.position.set(x, WATER_LEVEL + draft + Math.sin(this.time * 1.3 + e.id) * 0.025, z);
       v.body.rotation.x = Math.sin(this.time * 1.1 + e.id) * 0.03;
       v.body.rotation.z = Math.sin(this.time * 0.9 + e.id * 2) * 0.02;

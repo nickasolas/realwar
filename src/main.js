@@ -1,6 +1,6 @@
 import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH, MAP_SIZES } from './config.js';
 import { lineTiles } from './map.js';
-import { Game } from './sim.js';
+import { Game, cargoSize } from './sim.js';
 import { AIController } from './ai.js';
 import { Renderer3D, CAMERA } from './gfx/renderer3d.js';
 import { Audio } from './audio.js';
@@ -166,6 +166,24 @@ function issueContextOrder(wx, wy, target = null) {
   const planes = units.filter((u) => u.def.transport);
   if (planes.length && game.cmdParadrop(ME, planes.map((u) => u.id), wx, wy)) marker(wx, wy, '#7dff8a');
   if (planes.length === units.length) return;
+  // Ground units right-clicking our landing craft climb aboard.
+  if (target && target.owner === ME && target.kind === 'unit' && target.def.capacity) {
+    const riders = units.filter((u) => cargoSize(u) > 0);
+    if (riders.length && game.cmdBoard(ME, riders.map((u) => u.id), target.id)) {
+      marker(target.x, target.y, '#5fd0ff');
+      notify(`${riders.length} unit${riders.length > 1 ? 's' : ''} boarding the ${target.def.name}.`);
+      return;
+    }
+  }
+  // Loaded landing craft ordered onto land sail to the nearest beach and unload.
+  const onLand = game.map.passable(Math.floor(wx), Math.floor(wy), 'ground');
+  const landers = units.filter((u) => u.def.capacity && u.passengers?.length);
+  if (onLand && !target && landers.length && game.cmdUnload(ME, landers.map((u) => u.id), wx, wy)) {
+    marker(wx, wy, '#5fd0ff');
+    const rest = units.filter((u) => !landers.includes(u));
+    if (!rest.length) return;
+    units.splice(0, units.length, ...rest);
+  }
   const ids = units.map((u) => u.id);
   if (target && target.owner === ME && target.kind === 'building' && target.def.repairs) {
     const sent = game.cmdService(ME, ids, target.id);
@@ -453,6 +471,11 @@ window.addEventListener('keydown', (e) => {
     case 'l':
       startLaunchMode();
       break;
+    case 'u': {
+      const landers = myUnits().filter((u) => u.def.capacity && u.passengers?.length);
+      if (landers.length) notify(game.cmdUnload(ME, landers.map((u) => u.id)) ? 'Unloading.' : 'No beach within reach to unload.', false);
+      break;
+    }
     case 'delete': {
       const b = selectedEntities().find((x) => x.kind === 'building' && x.owner === ME);
       if (b) game.cmdSell(ME, b.id);
@@ -577,7 +600,9 @@ function refreshSidebar(force = false) {
       const afford = p.credits >= def.cost;
       const avail = game.unitAvailable(ME, utype);
       const weapon = def.weapon ? WEAPONS[def.weapon] : null;
-      const role = weapon ? `\nTargets: ${weapon.hits.join(', ')}` : def.scout ? '\nUnarmed scout' : def.transport ? `\nDrops ${def.drop.count} paratrooper squads at the Airbase rally point` : '';
+      const second = def.secondary ? `, plus ${WEAPONS[def.secondary].hits.join('/')} with its secondary` : '';
+      const role = weapon ? `\nTargets: ${weapon.hits.join(', ')}${second}` : def.scout ? '\nUnarmed scout' : def.transport ? `\nDrops ${def.drop.count} paratrooper squads at the Airbase rally point`
+        : def.capacity ? `\nCarries ${def.capacity} slots of ground troops (infantry 1, vehicles 2)` : '';
       const extra = def.stealth ? '\nStealthy: hidden unless enemies are close' : '';
       const how = avail ? 'Left-click: queue · Right-click: cancel' : `Research ${TECHS[def.tech].name} at a Research Lab to unlock`;
       const tip = `${def.name} — $${def.cost}\nHP ${def.hp} · Speed ${def.speed} · Sight ${def.sight}${role}${extra}\n${how}`;
@@ -616,7 +641,7 @@ function refreshSidebar(force = false) {
 
   // Selection panel.
   const sel = selectedEntities();
-  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${e.rally ? e.rally.x.toFixed(1) + ',' + e.rally.y.toFixed(1) + ',' + e.rally.well : '-'}:${game.tick - (e.repairedAt ?? -1e9) < 10}:${e.researchPaused}:${e.researchStalled}:${Math.floor((e.charge || 0) * 100)}:${e.dropT > 0}`).join('|');
+  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${e.rally ? e.rally.x.toFixed(1) + ',' + e.rally.y.toFixed(1) + ',' + e.rally.well : '-'}:${game.tick - (e.repairedAt ?? -1e9) < 10}:${e.researchPaused}:${e.researchStalled}:${Math.floor((e.charge || 0) * 100)}:${e.dropT > 0}:${e.passengers?.length}`).join('|');
   if (!force && key === lastSidebarKey) return;
   lastSidebarKey = key;
   if (!sel.length) { sidebar.sel.innerHTML = '<div class="hint">Nothing selected.</div>'; return; }
@@ -632,6 +657,17 @@ function refreshSidebar(force = false) {
       if (e.def.harvester) detail += `<div>Cargo: ${Math.round(e.cargo)} / 150</div>`;
       if (e.def.transport && e.owner === ME) detail += `<div class="hint">${e.order.dropped ? 'Returning to base' : 'Right-click to change the drop zone'}</div>`;
       if (e.def.stealth) detail += '<div class="hint">Stealthy: hidden unless enemies are within a few tiles</div>';
+      if (e.def.capacity) {
+        const counts = {};
+        for (const p of e.passengers || []) counts[p.def.name] = (counts[p.def.name] || 0) + 1;
+        const list = Object.entries(counts).map(([n, c]) => `${c} × ${n}`).join(', ');
+        detail += `<div>Cargo: ${game.load(e)} / ${e.def.capacity} slots${list ? ` (${list})` : ''}</div>`;
+        if (e.owner === ME) {
+          detail += e.passengers?.length
+            ? `<div class="btn-row"><button class="small" data-unload="${e.id}">Unload here (U)</button></div><div class="hint">Or right-click land to unload there</div>`
+            : '<div class="hint">Select ground units and right-click this craft to board (infantry 1 slot, vehicles 2)</div>';
+        }
+      }
       if (e.owner === ME && e.hp < e.maxHp) detail += `<div class="hint">${repairHint(e)}</div>`;
     } else {
       if (e.progress < 1) detail += `<div>Under construction: ${Math.round(e.progress * 100)}%</div>`;
@@ -775,6 +811,8 @@ $('sidebar').addEventListener('pointerdown', (e) => {
     if (!game.canResearch(ME, key)) return notify(`Requires ${t.requires.map((r) => TECHS[r].name).join(', ')}.`, true);
     if (res.points < t.points) return notify(`Need ${t.points - Math.floor(res.points)} more research points.`, true);
     game.cmdResearch(ME, key);
+  } else if (btn.dataset.unload) {
+    if (!game.cmdUnload(ME, [Number(btn.dataset.unload)])) notify('No beach within reach to unload.', true);
   } else if (btn.dataset.lab) {
     game.cmdLabToggle(ME, Number(btn.dataset.lab));
   } else if (btn.dataset.launch) {
@@ -828,6 +866,8 @@ function handleGameEvents() {
     else if (ev.type === 'researched') { notify(`Research complete: ${TECHS[ev.tech].name}.`); audio.blip(1200); }
     else if (ev.type === 'missileReady') { notify('Missile ready. Select the silo and press L to launch.', true); audio.blip(520); }
     else if (ev.type === 'paradrop') notify('Paratroopers away!');
+    else if (ev.type === 'landed') { notify(`${ev.count} unit${ev.count > 1 ? 's' : ''} ashore.`); audio.blip(700); }
+    else if (ev.type === 'boarded') audio.blip(950);
     else if (ev.type === 'underAttack' && game.time - lastUnderAttack > 12) {
       lastUnderAttack = game.time;
       notify('Our base is under attack!', true);
