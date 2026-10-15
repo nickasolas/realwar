@@ -42,6 +42,11 @@ h2 { margin: 2px 0 6px; font-size: 11px; text-transform: uppercase; letter-spaci
 .btn .cost { font-size: 11px; color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
 .btn.poor .cost { color: var(--bad); }
 .btn.locked { opacity: 0.35; cursor: not-allowed; }
+.btn.done { border-color: rgba(78, 227, 106, 0.45); }
+.btn.done .cost { color: var(--good); }
+.research-head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; font: 700 13px ui-monospace, Menlo, monospace; color: #8fd0ff; }
+.research-head .hint { grid-column: auto; font: 11px system-ui, sans-serif; }
+button.small:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.active { border-color: var(--good); box-shadow: inset 0 0 0 1px var(--good); }
 .btn.busy { border-color: var(--accent); }
 .btn .prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); }

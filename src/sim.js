@@ -1,10 +1,11 @@
 import {
   DT, TICK_RATE, UNITS, BUILDINGS, WEAPONS, FACTIONS, STARTING_CREDITS,
   TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR, ROAD, MAX_LINE, ECONOMY,
+  RESEARCH, TECHS,
 } from './config.js';
 import { generateMap } from './map.js';
 import { Terrain } from './config.js';
-import { findPath } from './path.js';
+import { findPath, nearestPassable } from './path.js';
 import { createRng } from './rng.js';
 
 const MAX_QUEUE = 5;
@@ -45,6 +46,7 @@ export class Game {
       defeated: false,
       constructing: null, // id of the structure currently being built
       emergencyAt: null, // game time a free truck arrives while stranded
+      research: { points: 0, done: new Set() },
       visible: new Uint8Array(this.map.w * this.map.h),
       explored: new Uint8Array(this.map.w * this.map.h),
       stats: { killed: 0, lost: 0, harvested: 0, repairSpent: 0 },
@@ -90,6 +92,7 @@ export class Game {
       tx, ty, w: def.w, h: def.h, x: tx + def.w / 2, y: ty + def.h / 2,
       hp: complete ? def.hp : def.hp * 0.1, maxHp: def.hp, radius: Math.max(def.w, def.h) / 2,
       progress: complete ? 1 : 0, queue: [], rally: null, cooldown: 0, target: null,
+      charge: 0, // missile silos: 0..1 until a launch is ready
     };
     this.map.setOccupied(tx, ty, def.w, def.h, b.id);
     if (def.gate) this.setGate(b, owner);
@@ -123,7 +126,76 @@ export class Game {
   canBuildType(owner, type) {
     const def = BUILDINGS[type];
     if (!def || def.buildable === false) return false;
+    if (def.tech && !this.hasTech(owner, def.tech)) return false;
     return (def.requires || []).every((r) => this.hasBuilding(owner, r));
+  }
+
+  // ------------------------------------------------------------ research
+
+  hasTech(owner, tech) { return this.players[owner].research.done.has(tech); }
+
+  // Can this player build the unit at all (researched if it needs to be)?
+  unitAvailable(owner, type) {
+    const def = UNITS[type];
+    return !!def && (!def.tech || this.hasTech(owner, def.tech));
+  }
+
+  // Not yet researched, and its prerequisite techs are.
+  canResearch(owner, key) {
+    const t = TECHS[key];
+    return !!t && !this.hasTech(owner, key) && (t.requires || []).every((r) => this.hasTech(owner, r));
+  }
+
+  cmdResearch(playerId, key) {
+    const r = this.players[playerId].research;
+    if (!this.canResearch(playerId, key) || r.points < TECHS[key].points) return false;
+    r.points -= TECHS[key].points;
+    r.done.add(key);
+    this.events.push({ type: 'researched', owner: playerId, tech: key });
+    return true;
+  }
+
+  // Pause or resume a Research Lab.
+  cmdLabToggle(playerId, labId, on) {
+    const b = this.get(labId);
+    if (!b || b.owner !== playerId || !b.def.research) return false;
+    b.researchPaused = on == null ? !b.researchPaused : !on;
+    return true;
+  }
+
+  // Launch a charged missile silo at a map position.
+  cmdLaunch(playerId, siloId, x, y) {
+    const b = this.get(siloId);
+    if (!b || b.owner !== playerId || !b.def.missile || b.progress < 1 || b.charge < 1) return false;
+    x = Math.max(0, Math.min(this.map.w - 0.01, x));
+    y = Math.max(0, Math.min(this.map.h - 0.01, y));
+    const key = b.def.missile.weapon, w = WEAPONS[key];
+    b.charge = 0;
+    this.projectiles.push({
+      x: b.x, y: b.y, sx: b.x, sy: b.y, tx: x, ty: y, targetId: null, owner: playerId, weapon: key,
+      speed: w.speed, homing: false, air: false, fromAir: false, shooterId: b.id,
+    });
+    this.events.push({ type: 'launch', owner: playerId, x: b.x, y: b.y, tx: x, ty: y });
+    return true;
+  }
+
+  // Re-aim a transport that hasn't dropped its troops yet.
+  cmdParadrop(playerId, ids, x, y) {
+    let n = 0;
+    for (const id of ids) {
+      const u = this.get(id);
+      if (!u || u.owner !== playerId || !u.def.transport || u.order.type !== 'paradrop' || u.order.dropped) continue;
+      u.order.x = x; u.order.y = y;
+      this.setPath(u, x, y);
+      n++;
+    }
+    return n > 0;
+  }
+
+  // Sight radius, including research bonuses for units.
+  sightOf(e) {
+    if (e.kind !== 'unit') return e.def.sight;
+    return e.def.sight + (this.hasTech(e.owner, 'optics') ? TECHS.optics.sightBonus : 0);
   }
 
   // Is tile (tx,ty) footprint within build radius of a finished friendly structure?
@@ -163,6 +235,8 @@ export class Game {
       }
       return false;
     }
+    // Stealthy units stay hidden unless detected (see updateFog) or just fired.
+    if (e.def.stealth && e.owner !== playerId && !(e.detectedBy & (1 << playerId)) && !(e.revealUntil > this.tick)) return false;
     const tx = Math.floor(e.x), ty = Math.floor(e.y);
     return this.map.inBounds(tx, ty) && vis[ty * this.map.w + tx] === 1;
   }
@@ -170,7 +244,8 @@ export class Game {
   // ------------------------------------------------------------ commands
 
   ownedUnits(playerId, ids) {
-    return ids.map((id) => this.get(id)).filter((e) => e && e.owner === playerId && e.kind === 'unit');
+    // Transports fly their own mission (see cmdParadrop); dropping troops can't act yet.
+    return ids.map((id) => this.get(id)).filter((e) => e && e.owner === playerId && e.kind === 'unit' && !e.def.transport && !(e.dropT > 0));
   }
 
   cmdMove(playerId, ids, x, y, attackMove = false) {
@@ -235,6 +310,7 @@ export class Game {
     const b = this.get(buildingId);
     if (!b || b.owner !== playerId || b.kind !== 'building') return false;
     if (!b.def.produces?.includes(unitType)) return false;
+    if (!this.unitAvailable(playerId, unitType)) return false;
     if (b.queue.length >= MAX_QUEUE) return false;
     const def = UNITS[unitType];
     const p = this.players[playerId];
@@ -468,6 +544,7 @@ export class Game {
     for (const o of this.entities.values()) {
       if (o.owner === e.owner || !canHit(weapon, o)) continue;
       if (o.kind === 'building' && o.def.segment) continue;
+      if (o.dropT > 0) continue;
       const d = this.distTo(e, o);
       if (d > radius) continue;
       if (!this.isVisibleTo(e.owner, o)) continue;
@@ -491,6 +568,7 @@ export class Game {
       shooterId: shooter.id,
     });
     this.events.push({ type: 'fire', fx: weapon.fx, x: shooter.x, y: shooter.y, owner: shooter.owner, shooterId: shooter.id });
+    if (shooter.def.stealth) shooter.revealUntil = this.tick + TICK_RATE * 2;
   }
 
   // Try to shoot `target` with the entity's weapons. Returns true if in range.
@@ -522,6 +600,9 @@ export class Game {
 
   applyDamage(target, amount, attackerOwner) {
     if (target.hp <= 0) return;
+    if (target.kind === 'unit' && (target.def.armor === 'light' || target.def.armor === 'heavy' || target.def.armor === 'ship') && this.hasTech(target.owner, 'armor')) {
+      amount *= 1 - TECHS.armor.armorBonus;
+    }
     target.hp -= amount;
     if (target.owner !== attackerOwner) target.hitAt = this.tick;
     if (target.kind === 'building') this.events.push({ type: 'underAttack', owner: target.owner, x: target.x, y: target.y });
@@ -582,6 +663,8 @@ export class Game {
   // ---------------------------------------------------------- per-entity
 
   updateUnit(u) {
+    // Paratroopers can't act until they land.
+    if (u.dropT > 0) { u.dropT -= DT; return; }
     if (u.cooldown > 0) u.cooldown -= DT;
     if (u.cooldown2 > 0) u.cooldown2 -= DT;
     if (u.pendingPath) {
@@ -625,10 +708,11 @@ export class Game {
         if (weapon || u.def.secondary) {
           // Units that were just shot at look further afield to retaliate.
           const provoked = this.tick - (u.hitAt ?? -1e9) < TICK_RATE * 2;
-          let sight = o.type === 'attackMove' ? u.def.sight : (weapon ? weapon.range + 1.5 : u.def.sight);
-          if (provoked) sight = Math.max(sight, u.def.sight + 3);
+          const see = this.sightOf(u);
+          let sight = o.type === 'attackMove' ? see : (weapon ? weapon.range + 1.5 : see);
+          if (provoked) sight = Math.max(sight, see + 3);
           let t = u.target ? this.get(u.target) : null;
-          if (t && (this.distTo(u, t) > u.def.sight + 2 || !this.isVisibleTo(u.owner, t))) t = null;
+          if (t && (this.distTo(u, t) > see + 2 || !this.isVisibleTo(u.owner, t))) t = null;
           if (!t) {
             t = this.findTarget(u, weapon || WEAPONS[u.def.secondary], sight);
             if (!t && u.def.secondary) t = this.findTarget(u, WEAPONS[u.def.secondary], sight);
@@ -663,7 +747,30 @@ export class Game {
       case 'harvest':
         this.updateHarvester(u);
         break;
+      case 'paradrop':
+        this.updateTransport(u);
+        break;
     }
+  }
+
+  // Fly to the drop zone, drop the troops, fly home and leave.
+  updateTransport(u) {
+    const o = u.order;
+    if (!this.followPath(u)) return;
+    if (o.dropped) { this.entities.delete(u.id); return; }
+    o.dropped = true;
+    const { unit, count } = u.def.drop;
+    for (let i = 0; i < count; i++) {
+      const a = i * 2.39996 + u.id, r = i ? 0.9 * Math.sqrt(i) : 0;
+      const spot = nearestPassable(this.map, Math.floor(o.x + Math.cos(a) * r), Math.floor(o.y + Math.sin(a) * r), 'ground', 6);
+      if (!spot) continue;
+      const t = this.addUnit(u.owner, unit, spot.x + 0.5, spot.y + 0.5);
+      t.dropT = 1.8 + i * 0.25; // seconds under canopy
+      t.angle = u.angle;
+      t.order = { type: 'guard', home: { x: t.x, y: t.y } };
+    }
+    this.events.push({ type: 'paradrop', owner: u.owner, x: o.x, y: o.y });
+    this.setPath(u, o.home.x, o.home.y);
   }
 
   nearestWell(u, exclude = -1) {
@@ -837,6 +944,10 @@ export class Game {
       return;
     }
     if (b.cooldown > 0) b.cooldown -= DT;
+    if (b.def.missile && b.charge < 1) {
+      b.charge = Math.min(1, b.charge + DT / b.def.missile.charge);
+      if (b.charge >= 1) this.events.push({ type: 'missileReady', owner: b.owner, x: b.x, y: b.y });
+    }
     if (b.def.weapon) {
       const w = WEAPONS[b.def.weapon];
       let t = b.target ? this.get(b.target) : null;
@@ -861,6 +972,15 @@ export class Game {
     const u = this.addUnit(b.owner, type, spot.x + 0.5, spot.y + 0.5);
     this.events.push({ type: 'unitReady', owner: b.owner, unit: type, x: u.x, y: u.y });
     const r = b.rally;
+    if (def.transport) {
+      // No rally point: drop just beyond the base, toward the map centre.
+      const cx = this.map.w / 2, cy = this.map.h / 2;
+      const d = Math.hypot(cx - b.x, cy - b.y) || 1;
+      const zone = r ? { x: r.x, y: r.y } : { x: b.x + (cx - b.x) / d * 10, y: b.y + (cy - b.y) / d * 10 };
+      u.order = { type: 'paradrop', x: zone.x, y: zone.y, home: { x: b.x, y: b.y }, dropped: false };
+      this.setPath(u, zone.x, zone.y);
+      return true;
+    }
     if (def.harvester) {
       // Trucks only take a rally point that marks a well; otherwise they go to work.
       const want = r && r.well != null && this.map.wells[r.well]?.amount > 0 ? r.well : this.chooseWell(u);
@@ -908,7 +1028,7 @@ export class Game {
     for (const p of this.players) p.visible.fill(0);
     for (const e of this.entities.values()) {
       const p = this.players[e.owner];
-      const r = e.kind === 'building' && e.progress < 1 ? 3 : e.def.sight;
+      const r = e.kind === 'building' && e.progress < 1 ? 3 : this.sightOf(e);
       const cx = e.x, cy = e.y;
       const r2 = r * r;
       const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r));
@@ -921,6 +1041,22 @@ export class Game {
             p.explored[y * w + x] = 1;
           }
         }
+      }
+    }
+  }
+
+  // Which players can currently see each stealthy unit: anything of theirs
+  // within the unit's stealth radius, or within a ship's sonar range.
+  updateDetection() {
+    const hidden = [];
+    for (const e of this.entities.values()) if (e.kind === 'unit' && e.def.stealth) { e.detectedBy = 0; hidden.push(e); }
+    if (!hidden.length) return;
+    for (const o of this.entities.values()) {
+      const reach = Math.max(o.def.sonar || 0, 0);
+      for (const h of hidden) {
+        if (h.owner === o.owner) continue;
+        const r = Math.max(h.def.stealth, reach) + (o.kind === 'building' ? Math.max(o.w, o.h) / 2 : 0);
+        if (Math.hypot(h.x - o.x, h.y - o.y) <= r) h.detectedBy |= 1 << o.owner;
       }
     }
   }
@@ -939,7 +1075,7 @@ export class Game {
     this.updateProjectiles();
     if (this.tick % REPAIR_INTERVAL === 0) this.updateRepairs();
     if (this.tick % TICK_RATE === 0) this.updateEconomy();
-    if (this.tick % FOG_INTERVAL === 0) this.updateFog();
+    if (this.tick % FOG_INTERVAL === 0) { this.updateDetection(); this.updateFog(); }
     this.checkVictory();
   }
 
@@ -958,6 +1094,7 @@ export class Game {
         if (e.def.harvester) trucks++;
         else if (e.kind === 'building' && e.queue?.some((q) => UNITS[q.type].harvester)) trucks++;
       }
+      this.updateResearch(p);
       if (!hq) { p.emergencyAt = null; continue; }
       p.credits += ECONOMY.hqIncome;
       if (!this.isStranded(p, trucks)) { p.emergencyAt = null; continue; }
@@ -968,6 +1105,20 @@ export class Game {
         p.emergencyAt = null;
         this.events.push({ type: 'emergencyTruck', owner: p.id });
       }
+    }
+  }
+
+  // Each running lab buys research points with credits, once a second.
+  // Labs idle once there is nothing left to research.
+  updateResearch(p) {
+    if (!Object.keys(TECHS).some((k) => !p.research.done.has(k))) return;
+    for (const b of this.entities.values()) {
+      if (b.owner !== p.id || !b.def.research || b.progress < 1) continue;
+      if (b.researchPaused) { b.researchStalled = false; continue; }
+      if (p.credits < RESEARCH.cost) { b.researchStalled = true; continue; }
+      b.researchStalled = false;
+      p.credits -= RESEARCH.cost;
+      p.research.points += RESEARCH.rate;
     }
   }
 

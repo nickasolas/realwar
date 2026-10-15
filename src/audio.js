@@ -42,6 +42,7 @@ export class Audio {
       case 'artillery': this.thump(now, 70, 0.4, 0.8 * vol); this.burst(now, 0.3, 500, 0.5 * vol); break;
       case 'bomb': this.burst(now, 0.4, 900, 0.2 * vol, true); break;
       case 'explode': this.thump(now, 55, 0.6 + size * 0.1, 0.9 * vol); this.burst(now, 0.5 + size * 0.1, 400, 0.7 * vol); break;
+      case 'launch': this.thump(now, 40, 1.6, 1.0 * vol); this.burst(now, 2.2, 600, 0.6 * vol, true); break;
       case 'die': this.burst(now, 0.12, 900, 0.15 * vol); break;
     }
   }

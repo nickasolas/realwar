@@ -308,6 +308,68 @@ function samLauncher(p) {
   p.box(0.08, 0.05, 0.005, 'team', { x: -0.06, y: 0.12, z: 0.073 });
 }
 
+// Research Lab (3x2): white laboratory block with ribbon windows, an
+// observatory dome, a rooftop plant room and a rotating dish.
+function lab(p) {
+  slab(p, 3, 2);
+  p.cbox(1.9, 0.5, 1.3, '#e3e2dc', { x: -0.45, y: 0.37, surf: 'concrete' }, 0.02);
+  for (const y of [0.3, 0.5]) {
+    p.box(1.86, 0.08, 0.005, C.glass, { x: -0.45, y, z: 0.653, surf: 'glass' });
+    p.box(0.005, 0.08, 1.26, C.glass, { x: -1.403, y, surf: 'glass' });
+  }
+  p.box(1.9, 0.03, 0.05, 'team', { x: -0.45, y: 0.6, z: 0.63 });
+  p.box(0.3, 0.26, 0.02, '#2c3236', { x: 0.1, y: 0.25, z: 0.655 }); // entrance
+  p.box(0.42, 0.03, 0.18, '#cfcdc4', { x: 0.1, y: 0.4, z: 0.72 }); // canopy
+  p.cbox(0.6, 0.16, 0.5, '#b9b8b0', { x: -0.8, y: 0.7, z: -0.2 }, 0.01); // plant room
+  for (let i = 0; i < 3; i++) p.cyl(0.07, 0.07, 0.06, C.steel, { x: -1.0 + i * 0.2, y: 0.8, z: 0.2 }, 12);
+  // Observatory wing with dome.
+  p.cyl(0.5, 0.52, 0.42, '#d9d8d1', { x: 1.0, y: 0.33, z: 0.0, surf: 'concrete' }, 20);
+  p.sphere(0.5, '#eeeeea', { x: 1.0, y: 0.54, sy: 0.75 }, 20, 10);
+  p.box(0.12, 0.3, 0.02, '#2c3236', { x: 1.0, y: 0.78, z: 0.25, rx: -0.5 }); // dome slit
+  // Antenna mast.
+  p.rod([-0.2, 0.6, -0.45], [-0.2, 1.3, -0.45], 0.01, C.gunmetal);
+  for (const y of [0.9, 1.1]) p.rod([-0.3, y, -0.45], [-0.1, y, -0.45], 0.006, C.gunmetal);
+  p.light(0.016, '#ff3030', { x: -0.2, y: 1.31, z: -0.45 });
+  crate(p, 1.25, 0.8, 0.08);
+}
+
+function labDish(p) {
+  p.cyl(0.02, 0.03, 0.14, C.gunmetal, { y: 0.07 }, 8);
+  p.sphere(0.18, C.white, { y: 0.2, x: 0.04, sx: 0.35, rz: -0.6 }, 14, 8);
+  p.rod([0.06, 0.2, 0], [0.18, 0.28, 0], 0.005, C.gunmetal);
+}
+
+// ICBM Silo (2x2): hardened pad with a round launch tube, two blast doors
+// (animated), a control bunker and hazard stripes.
+function silo(p) {
+  slab(p, 2, 2, C.concreteDark);
+  p.cyl(0.62, 0.7, 0.18, C.concrete, { y: 0.2, surf: 'concrete' }, 24);
+  p.cyl(0.42, 0.42, 0.02, '#151515', { y: 0.3 }, 24); // tube mouth
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * PI * 2;
+    p.box(0.1, 0.012, 0.05, i % 2 ? '#151515' : C.yellow, { x: Math.cos(a) * 0.55, y: 0.296, z: Math.sin(a) * 0.55, ry: -a });
+  }
+  p.cbox(0.5, 0.2, 0.28, C.concrete, { x: -0.6, y: 0.2, z: 0.72, surf: 'concrete' }, 0.02); // bunker
+  p.box(0.12, 0.1, 0.01, '#2c3236', { x: -0.6, y: 0.18, z: 0.865 });
+  p.box(0.3, 0.02, 0.16, 'team', { x: -0.6, y: 0.31, z: 0.72 });
+  p.rod([0.75, 0.12, -0.75], [0.75, 0.75, -0.75], 0.01, C.gunmetal);
+  p.light(0.016, '#ff3030', { x: 0.75, y: 0.76, z: -0.75 });
+}
+
+// One sliding blast door leaf, from its outer edge (x = 0) inward.
+function siloDoor(p) {
+  p.box(0.44, 0.06, 0.86, '#6d6b62', { x: 0.22, surf: 'concrete' });
+  p.box(0.06, 0.07, 0.86, C.yellow, { x: 0.41 });
+}
+
+// The missile, nose up; raised into view once it's ready.
+function siloMissile(p) {
+  p.cyl(0.13, 0.13, 1.1, C.white, { y: -0.2 }, 16);
+  p.cone(0.13, 0.36, C.white, { y: 0.53 }, 16);
+  p.cyl(0.135, 0.135, 0.05, 'team', { y: 0.2 }, 16);
+  p.cyl(0.135, 0.135, 0.03, '#151515', { y: -0.1 }, 16);
+}
+
 // Concrete T-wall: a centre post plus an arm toward each connected
 // neighbour (E, SE, S, SW, W, NW, N, NE). The renderer toggles arms.
 const WALL_DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
@@ -367,6 +429,8 @@ const STRUCTURES = {
   shipyard: { body: shipyard },
   turret: { body: turret, turret: [turretGun, 0, 0.44, 0] },
   samsite: { body: samsite, turret: [samLauncher, 0.05, 0.26, 0] },
+  lab: { body: lab, dish: [labDish, 0.5, 0.58, -0.5] },
+  silo: { body: silo },
 };
 
 export function buildStructure(type, owner, w, h) {
@@ -393,6 +457,18 @@ export function buildStructure(type, owner, w, h) {
       return arm;
     });
     parts.dirs = WALL_DIRS;
+  }
+  if (type === 'silo') {
+    parts.doors = [-1, 1].map((side) => {
+      const d = cached(`${key}:door`, team, siloDoor);
+      d.position.set(side * 0.46, 0.33, 0);
+      d.rotation.y = side < 0 ? 0 : PI;
+      root.add(d);
+      return d;
+    });
+    parts.missile = cached(`${key}:missile`, team, siloMissile);
+    parts.missile.position.set(0, -0.6, 0);
+    root.add(parts.missile);
   }
   if (type === 'gate') {
     parts.leaf = cached(`${key}:leaf`, team, gateLeaf);

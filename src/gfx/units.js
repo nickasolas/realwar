@@ -351,6 +351,105 @@ function drone(p) {
   p.light(0.016, '#ff3030', { x: 0.13, y: 0.03, z: -0.08 });
 }
 
+// ------------------------------------------------- researched units
+
+// Special forces: two operators in dark fatigues and berets, long rifles.
+function operator(p, x, z) {
+  for (const s of [-1, 1]) p.box(0.028, 0.11, 0.032, '#24261f', { x, y: 0.055, z: z + s * 0.02 });
+  p.cbox(0.06, 0.1, 0.08, '#2c2f27', { x, y: 0.15, z }, 0.008);
+  p.box(0.066, 0.055, 0.086, '#1d1f1a', { x, y: 0.165, z }); // plate carrier
+  p.box(0.045, 0.06, 0.055, '#3a3d31', { x: x - 0.045, y: 0.17, z });
+  p.sphere(0.026, '#b58c66', { x: x + 0.004, y: 0.225, z }, 8, 6);
+  p.cyl(0.034, 0.03, 0.018, 'teamDark', { x: x - 0.004, y: 0.25, z, rz: -0.25 }, 10); // beret
+  p.box(0.006, 0.012, 0.05, '#111', { x: x + 0.027, y: 0.228, z }); // goggles
+  for (const s of [-1, 1]) p.rod([x, 0.19, z + s * 0.045], [x + 0.06, 0.17, z + s * 0.02], 0.012, '#2c2f27');
+  // Long rifle with scope and suppressor.
+  p.rod([x - 0.02, 0.17, z + 0.01], [x + 0.22, 0.18, z + 0.01], 0.008, C.gunmetal);
+  p.cyl(0.011, 0.011, 0.06, '#111', { x: x + 0.06, y: 0.195, z: z + 0.01, rz: PI / 2 }, 8);
+  p.cyl(0.011, 0.011, 0.05, '#111', { x: x + 0.24, y: 0.18, z: z + 0.01, rz: PI / 2 }, 8);
+  p.box(0.004, 0.006, 0.004, 'team', { x: x - 0.002, y: 0.2, z: z + 0.042 });
+}
+
+function commando(p) {
+  operator(p, 0.06, 0.06);
+  operator(p, -0.08, -0.08);
+}
+
+// Parachute canopy and rigging, shown while paratroopers descend.
+function parachute(p) {
+  p.sphere(0.36, '#6f7552', { y: 0.95, sy: 0.45 }, 18, 8);
+  p.cyl(0.36, 0.36, 0.01, '#4d5238', { y: 0.95 }, 18);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * PI * 2;
+    p.rod([Math.cos(a) * 0.34, 0.94, Math.sin(a) * 0.34], [0, 0.26, 0], 0.003, '#d8d4c4');
+  }
+}
+
+// MQ-9 style armed drone: slender fuselage, long straight wings, V-tail,
+// pusher propeller, a missile under each wing.
+function strikedrone(p) {
+  p.cyl(0.04, 0.03, 0.7, 'body', { x: -0.02, rz: PI / 2 }, 12);
+  p.sphere(0.06, 'body', { x: 0.3, y: 0.01, sx: 1.6, sy: 0.8 }, 12, 8); // sensor bulge
+  p.sphere(0.035, '#1c1c1c', { x: 0.28, y: -0.05 }, 10, 8); // targeting turret
+  p.sphere(0.018, '#2f6fa8', { x: 0.305, y: -0.055, surf: 'glass' }, 8, 6);
+  for (const s of [-1, 1]) {
+    p.plan([[0.07, s * 0.03], [0.03, s * 0.62], [-0.04, s * 0.62], [-0.06, s * 0.03]], 0.014, 'body', { y: 0.02 });
+    p.cyl(0.022, 0.022, 0.005, 'team', { x: 0, y: 0.03, z: s * 0.4 }, 10);
+    // Missile on a pylon.
+    p.box(0.05, 0.03, 0.01, C.gunmetal, { x: 0.01, y: 0, z: s * 0.28 });
+    p.cyl(0.015, 0.015, 0.2, C.white, { x: 0.02, y: -0.03, z: s * 0.28, rz: PI / 2 }, 8);
+    p.cone(0.015, 0.04, C.red, { x: 0.14, y: -0.03, z: s * 0.28, rz: -PI / 2 }, 8);
+    // V-tail.
+    p.plan([[-0.3, 0], [-0.44, s * 0.16], [-0.48, s * 0.16], [-0.4, 0]], 0.01, 'body', { y: 0.03, rx: s * -0.6 });
+  }
+  p.cyl(0.02, 0.02, 0.04, C.gunmetal, { x: -0.39, rz: PI / 2 }, 8);
+}
+
+function strikedroneProp(p) {
+  p.box(0.006, 0.2, 0.02, '#151515', {});
+  p.box(0.006, 0.02, 0.2, '#151515', {});
+}
+
+// Attack submarine: mostly submerged teardrop hull, sail with dive planes,
+// cruciform tail.
+function submarine(p) {
+  const dark = '#22262a';
+  p.sphere(0.5, dark, { y: -0.02, sx: 1.0, sy: 0.14, sz: 0.16 }, 20, 10);
+  p.box(0.6, 0.02, 0.1, '#2b3035', { y: 0.05 }); // deck casing
+  p.cbox(0.2, 0.17, 0.07, dark, { x: 0.12, y: 0.13 }, 0.02); // sail
+  p.box(0.12, 0.012, 0.22, dark, { x: 0.13, y: 0.17 }); // sail planes
+  p.rod([0.16, 0.2, 0], [0.16, 0.32, 0], 0.006, C.gunmetal); // periscope
+  p.rod([0.1, 0.2, 0.012], [0.1, 0.28, 0.012], 0.005, C.gunmetal); // mast
+  p.box(0.06, 0.03, 0.074, 'team', { x: 0.12, y: 0.08 });
+  p.box(0.08, 0.008, 0.28, dark, { x: -0.44, y: 0.01 }); // stern planes
+  p.box(0.08, 0.2, 0.008, dark, { x: -0.44, y: 0.02 }); // rudder
+  p.light(0.01, '#ff3030', { x: 0.13, y: 0.22 });
+}
+
+// C-130 style transport: high wing, four turboprops, raised tail.
+function transport(p) {
+  p.cyl(0.11, 0.11, 1.1, 'body', { x: 0.0, y: 0.0, rz: PI / 2 }, 16);
+  p.sphere(0.11, 'body', { x: 0.55, sx: 1.4 }, 16, 10); // nose
+  p.cone(0.11, 0.5, 'body', { x: -0.79, y: 0.05, rz: PI / 2, sy: 1 }, 16); // tapering rear
+  p.box(0.12, 0.04, 0.16, C.glass, { x: 0.6, y: 0.07, surf: 'glass' }); // cockpit
+  p.plan([[0.2, -0.85], [0.2, 0.85], [0.02, 0.85], [-0.02, 0.0], [0.02, -0.85]], 0.03, 'body', { y: 0.1 });
+  for (const z of [-0.6, -0.32, 0.32, 0.6]) {
+    p.cyl(0.04, 0.035, 0.24, 'body', { x: 0.2, y: 0.07, z, rz: PI / 2 }, 10);
+    p.cyl(0.022, 0.022, 0.02, C.gunmetal, { x: 0.33, y: 0.07, z, rz: PI / 2 }, 8);
+  }
+  for (const s of [-1, 1]) p.cyl(0.03, 0.03, 0.004, 'team', { x: 0.1, y: 0.13, z: s * 0.55 }, 12);
+  p.profile([[-0.78, 0.08], [-0.55, 0.08], [-0.82, 0.42], [-0.92, 0.42]], 0.02, 'body', {}, 0.004); // fin
+  p.box(0.14, 0.015, 0.6, 'body', { x: -0.86, y: 0.12 }); // tailplane
+  p.box(0.08, 0.05, 0.002, 'team', { x: -0.2, y: 0.04, z: 0.111 });
+  p.light(0.012, '#ff3030', { x: 0.1, y: 0.13, z: -0.86 });
+  p.light(0.012, '#3cff6a', { x: 0.1, y: 0.13, z: 0.86 });
+}
+
+function transportProp(p) {
+  p.box(0.006, 0.22, 0.02, '#151515', {});
+  p.box(0.006, 0.02, 0.22, '#151515', {});
+}
+
 // ------------------------------------------------------------- build
 
 const BUILDERS = {
@@ -367,6 +466,11 @@ const BUILDERS = {
   gunboat: { body: gunboat, turret: [gunboatTurret, 0.3, 0.12] },
   destroyer: { body: destroyer, turret: [destroyerTurret, 0.6, 0.16], radar: [radarBar, 0.16, 0.8] },
   drone: { body: drone },
+  commando: { body: commando },
+  para: { body: (p) => infantry(p, false) },
+  strikedrone: { body: strikedrone },
+  submarine: { body: submarine },
+  paratroopers: { body: transport },
 };
 
 export function buildUnit(type, owner) {
@@ -406,6 +510,24 @@ export function buildUnit(type, owner) {
       root.add(r);
       return r;
     });
+  }
+  if (type === 'strikedrone') {
+    parts.props = [cached(key + ':p', team, strikedroneProp)];
+    parts.props[0].position.set(-0.42, 0, 0);
+    root.add(parts.props[0]);
+  }
+  if (type === 'paratroopers') {
+    parts.props = [-0.6, -0.32, 0.32, 0.6].map((z) => {
+      const pr = cached(key + ':p', team, transportProp);
+      pr.position.set(0.345, 0.07, z);
+      root.add(pr);
+      return pr;
+    });
+  }
+  if (type === 'para') {
+    parts.chute = cached(key + ':c', team, parachute);
+    parts.chute.visible = false;
+    root.add(parts.chute);
   }
   const wrap = new THREE.Group();
   wrap.add(root);

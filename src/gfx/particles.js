@@ -213,6 +213,60 @@ export class Particles {
     }
   }
 
+  // Missile exhaust: a bright flame and a thick lingering smoke column.
+  missileTrail(x, y, z) {
+    this.fire.spawn({ x, y, z, life: 0.12, size: 0.5, size1: 0.2, color: [1, 0.9, 0.6, 1], color1: [1, 0.4, 0.1, 0] });
+    this.smoke.spawn({
+      x: x + rnd(-0.05, 0.05), y, z: z + rnd(-0.05, 0.05), vy: 0.05, life: rnd(2.5, 4), size: 0.35, size1: 1.4, drag: 0.6,
+      color: [0.85, 0.84, 0.82, 0.6], color1: [0.7, 0.7, 0.7, 0],
+    });
+  }
+
+  // Silo launch: a billowing cloud of exhaust around the pad.
+  launchPlume(x, y, z) {
+    this.fire.spawn({ x, y: y + 0.3, z, life: 0.4, size: 1.6, size1: 2.4, color: [1, 0.9, 0.6, 1], color1: [1, 0.5, 0.1, 0] });
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * Math.PI * 2, sp = rnd(0.6, 2.4);
+      this.smoke.spawn({
+        x, y: y + rnd(0, 0.4), z, vx: Math.cos(a) * sp, vy: rnd(0.1, 0.8), vz: Math.sin(a) * sp,
+        life: rnd(2.5, 5), size: rnd(0.4, 0.8), size1: rnd(1.6, 2.6), drag: 0.7,
+        color: [0.88, 0.86, 0.84, 0.75], color1: [0.7, 0.7, 0.7, 0],
+      });
+    }
+  }
+
+  // Strategic missile impact: flash, fireball, shock ring and a rising cap.
+  mushroom(x, y, z, radius) {
+    const r = radius;
+    this.fire.spawn({ x, y: y + 0.5, z, life: 0.5, size: r * 3, size1: r * 4.5, color: [1, 1, 0.9, 1], color1: [1, 0.6, 0.2, 0] });
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2, sp = rnd(2, 6) * r * 0.4;
+      // Shock ring of dust racing outward along the ground.
+      this.smoke.spawn({
+        x, y: y + 0.2, z, vx: Math.cos(a) * sp, vy: 0.1, vz: Math.sin(a) * sp,
+        life: rnd(1.5, 2.5), size: 0.6, size1: 1.8, drag: 1.2,
+        color: [0.55, 0.47, 0.38, 0.8], color1: [0.6, 0.55, 0.5, 0],
+      });
+    }
+    for (let i = 0; i < 50; i++) {
+      // Stem and cap: fire and smoke rising, the cap spreading at the top.
+      const a = Math.random() * Math.PI * 2, cap = i > 25, out = cap ? rnd(0.6, 1.6) : rnd(0, 0.4);
+      this.fire.spawn({
+        x: x + Math.cos(a) * out * 0.3, y: y + 0.3, z: z + Math.sin(a) * out * 0.3,
+        vx: Math.cos(a) * out, vy: cap ? rnd(3.5, 5) : rnd(1.5, 4), vz: Math.sin(a) * out,
+        life: rnd(0.8, 1.6), size: rnd(0.8, 1.4) * r * 0.5, size1: 0.3, drag: 0.9,
+        color: [1, rnd(0.5, 0.8), 0.2, 1], color1: [0.7, 0.2, 0.05, 0],
+      });
+      this.smoke.spawn({
+        x: x + Math.cos(a) * out * 0.3, y: y + 0.4, z: z + Math.sin(a) * out * 0.3,
+        vx: Math.cos(a) * out * (cap ? 0.9 : 0.2), vy: cap ? rnd(2.8, 3.8) : rnd(1, 3), vz: Math.sin(a) * out * (cap ? 0.9 : 0.2),
+        life: rnd(5, 8), size: rnd(1, 1.6), size1: rnd(2.5, 4) * r * 0.5, drag: 0.55,
+        color: [0.3, 0.24, 0.2, 0.8], color1: [0.5, 0.46, 0.42, 0],
+      });
+    }
+    this.spark(x, y + 0.5, z, 40, 8);
+  }
+
   airBurst(x, y, z) {
     this.fire.spawn({ x, y, z, life: 0.12, size: 0.4, size1: 0.6, color: [1, 0.85, 0.5, 1], color1: [1, 0.4, 0.1, 0] });
     this.smoke.spawn({ x, y, z, life: 0.9, size: 0.3, size1: 0.7, drag: 0.5, color: [0.12, 0.12, 0.12, 0.7], color1: [0.2, 0.2, 0.2, 0] });

@@ -65,6 +65,27 @@ npm start            # http://localhost:8080
   fight on the way. Rally a Command Center or Vehicle Plant onto an oil
   well to send new trucks to that well. Right-click the structure itself
   (or *Clear*) to remove it.
+- **Research:** a **Research Lab** (needs a Vehicle Plant) turns credits
+  into research points: each lab makes 1 point a second for $4 a second
+  while it runs (pause it from its panel; it stalls when funds run out).
+  Spend points in the sidebar's Research panel:
+  - *Special Forces* (45): elite Barracks infantry with long-range rifles and
+    demolition charges that wreck structures.
+  - *Attack Drones* (60): fast, cheap armed drones from the Airbase.
+  - *Advanced Optics* (50): every unit sees 2 tiles further.
+  - *Submarines* (90): Naval Yard attack subs that torpedo ships and stay
+    hidden unless an enemy is within a few tiles, or for a moment after they
+    fire. Patrol Boats and Missile Cruisers have sonar that reaches further.
+  - *Airborne Infantry* (90): Paratroopers from the Airbase. A transport flies
+    to the Airbase's rally point and drops four squads, then flies home.
+    Right-click with the transport selected to change its drop zone.
+  - *Composite Armor* (110): vehicles and ships take 20% less damage.
+  - *Strategic Missiles* (200, needs Advanced Optics): the **ICBM Silo**.
+    It charges for three minutes; select it and press **L** (or *Launch
+    missile*), then click a target anywhere on the map. Both sides see the
+    launch and the target.
+  The computer researches too and fields all of it. Tuning lives in
+  `RESEARCH`, `TECHS` and the unit and building tables in `src/config.js`.
 - **Win:** destroy every enemy structure (walls and gates don't count).
 
 ### Controls
@@ -76,6 +97,7 @@ npm start            # http://localhost:8080
 | A + click | Attack-move |
 | S / H | Stop / jump to HQ |
 | R | Repair selected structure, or send selected units for repairs |
+| L | Launch a charged ICBM Silo (then click the target) |
 | Ctrl+1–9, 1–9 | Assign / recall group (press twice to center) |
 | Arrows, screen edge, middle-drag, wheel | Scroll and zoom |
 | P, +/-, M, Del | Pause, game speed, mute, sell structure |

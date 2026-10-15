@@ -1,15 +1,17 @@
-import { BUILDINGS, UNITS, TICK_RATE } from './config.js';
+import { BUILDINGS, UNITS, WEAPONS, TICK_RATE, TECHS, TECH_ORDER } from './config.js';
 import { lineTiles } from './map.js';
 
 // Scripted opponent. It issues the same commands a human would through the
 // Game command API, so it plays by the same economic rules.
-const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'depot', 'shipyard', 'samsite', 'airfield', 'refinery', 'turret', 'samsite'];
+// Steps that need research (the ICBM Silo) are skipped until it's done.
+const BUILD_PLAN = ['refinery', 'barracks', 'factory', 'turret', 'depot', 'shipyard', 'samsite', 'airfield', 'lab', 'refinery', 'turret', 'samsite', 'silo'];
 
+// Production rotations; units that still need research are skipped.
 const ARMY_MIX = {
-  barracks: ['infantry', 'infantry', 'rocketeer'],
+  barracks: ['infantry', 'infantry', 'rocketeer', 'commando'],
   factory: ['tank', 'tank', 'scout', 'aa', 'artillery'],
-  airfield: ['heli', 'fighter', 'heli', 'bomber'],
-  shipyard: ['gunboat', 'gunboat', 'destroyer'],
+  airfield: ['heli', 'strikedrone', 'fighter', 'paratroopers', 'heli', 'bomber'],
+  shipyard: ['submarine', 'gunboat', 'gunboat', 'destroyer'],
 };
 
 // wallAfter: how many build-plan steps must be done before the AI starts
@@ -20,6 +22,8 @@ const DIFFICULTY = {
   hard: { thinkEvery: 0.5, attackSize: 8, maxTrucks: 6, incomeBonus: 2, wallAfter: 5, wallMargin: 4 },
 };
 
+const MIX_PATIENCE = 40; // seconds a producer waits to afford one unit before skipping it
+const LAB_FLOAT = 500; // research only runs with at least this much spare cash
 const WALL_RESERVE = 450; // production holds this back while the wall is unfinished
 const WALL_FLOAT = 100; // walls never spend the last of the money
 const WALL_BATCH = 10; // most segments placed per think
@@ -31,6 +35,7 @@ export class AIController {
     this.cfg = DIFFICULTY[difficulty] || DIFFICULTY.normal;
     this.planIndex = 0;
     this.mixIndex = {};
+    this.mixWait = {};
     this.nextThink = 0;
     this.wave = 0;
     this.lastAttack = 0;
@@ -57,12 +62,15 @@ export class AIController {
     // Center's income or its emergency truck will get the economy going).
     if (this.manageEconomy()) {
       for (const b of this.mine((e) => e.kind === 'building' && e.repairing)) g.cmdRepair(this.id, b.id, false);
+      for (const b of this.mine((e) => e.kind === 'building' && e.def.research && !e.researchPaused)) g.cmdLabToggle(this.id, b.id, false);
       this.manageArmy();
       this.manageScouting();
       return;
     }
+    this.manageResearch();
     this.manageConstruction();
     this.manageProduction();
+    this.manageStrategic();
     this.manageRepairs();
     this.manageArmy();
     this.manageScouting();
@@ -147,6 +155,7 @@ export class AIController {
       const type = BUILD_PLAN[i];
       wanted[type] = (wanted[type] || 0) + 1;
       if ((counts[type] || 0) >= wanted[type]) continue;
+      if (BUILDINGS[type].tech && !this.game.hasTech(this.id, BUILDINGS[type].tech)) continue;
       this.planProgress = i;
       if (!this.game.canBuildType(this.id, type)) return;
       const spot = this.findSpot(type);
@@ -301,17 +310,26 @@ export class AIController {
 
   manageProduction() {
     const g = this.game;
-    const producers = this.mine((e) => e.kind === 'building' && e.progress >= 1 && ARMY_MIX[e.type]);
+    // Pricier producers order first so cheap infantry doesn't soak up every credit.
+    const rank = { airfield: 0, shipyard: 1, factory: 2, barracks: 3 };
+    const producers = this.mine((e) => e.kind === 'building' && e.progress >= 1 && ARMY_MIX[e.type])
+      .sort((a, b) => rank[a.type] - rank[b.type]);
     // Save up for the next structure (or the wall), but never stall an
     // empty factory for long.
     const reserve = this.savingFor || (this.wallsPending ? WALL_RESERVE : 0);
     for (const b of producers) {
       if (b.queue.length >= (reserve ? 1 : 2)) continue;
       if (reserve && b.queue.length === 0 && this.game.time % 20 > this.cfg.thinkEvery) continue;
-      const mix = ARMY_MIX[b.type];
+      const mix = ARMY_MIX[b.type].filter((t) => g.unitAvailable(this.id, t));
       const i = this.mixIndex[b.id] || 0;
       const type = mix[i % mix.length];
-      if (this.player.credits - UNITS[type].cost < reserve) continue;
+      if (this.player.credits - UNITS[type].cost < reserve) {
+        // Don't wait forever on one pricey item: move on to the next.
+        this.mixWait[b.id] ??= g.time;
+        if (g.time - this.mixWait[b.id] > MIX_PATIENCE) { this.mixIndex[b.id] = i + 1; this.mixWait[b.id] = null; }
+        continue;
+      }
+      this.mixWait[b.id] = null;
       if (g.cmdQueue(this.id, b.id, type)) this.mixIndex[b.id] = i + 1;
     }
   }
@@ -319,7 +337,7 @@ export class AIController {
   manageArmy() {
     const g = this.game;
     // Units heading to (or sitting at) a repair facility sit out attacks.
-    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester && !e.def.scout && !e.aiServicing);
+    const army = this.mine((e) => e.kind === 'unit' && !e.def.harvester && !e.def.scout && !e.def.transport && !(e.dropT > 0) && !e.aiServicing);
     const hq = this.mine((e) => e.type === 'hq')[0] || this.mine((e) => e.kind === 'building')[0];
 
     // Defend: if enemies are near our base, everyone idle responds.
@@ -361,6 +379,57 @@ export class AIController {
       const stray = ready.filter((u) => u.def.domain !== 'naval' && Math.hypot(u.x - rx, u.y - ry) > 5);
       if (stray.length) g.cmdMove(this.id, stray.map((u) => u.id), rx, ry);
     }
+  }
+
+  // Research in a fixed order. Labs only run on spare cash, so building
+  // and the army come first.
+  manageResearch() {
+    const g = this.game;
+    const on = this.player.credits - (this.savingFor || 0) > LAB_FLOAT;
+    for (const b of this.mine((e) => e.kind === 'building' && e.def.research && !e.researchPaused !== on)) g.cmdLabToggle(this.id, b.id, on);
+    const next = TECH_ORDER.find((k) => g.canResearch(this.id, k));
+    if (next && this.player.research.points >= TECHS[next].points) g.cmdResearch(this.id, next);
+  }
+
+  // Missile strikes, drop zones for paratroopers, and orders for troops
+  // that have just landed.
+  manageStrategic() {
+    const g = this.game;
+    for (const silo of this.mine((e) => e.def.missile && e.progress >= 1 && e.charge >= 1)) {
+      const t = this.pickMissileTarget(silo.def.missile.weapon);
+      if (t) g.cmdLaunch(this.id, silo.id, t.x, t.y);
+    }
+    for (const u of this.mine((e) => e.def.transport && e.order.type === 'paradrop' && !e.order.dropped && !e.aiAimed)) {
+      // Drop on the enemy economy: a Supply Depot if there is one, else the base.
+      const foes = [...g.entities.values()].filter((e) => e.owner !== this.id && e.kind === 'building' && !e.def.segment);
+      const t = foes.find((e) => e.type === 'refinery') || foes.find((e) => e.type === 'hq') || foes[0];
+      if (t) g.cmdParadrop(this.id, [u.id], t.x + t.w / 2 + 2, t.y + t.h / 2 + 2);
+      u.aiAimed = true;
+    }
+    const landed = this.mine((e) => e.type === 'para' && !(e.dropT > 0) && e.order.type === 'guard');
+    if (landed.length) {
+      let best = null, bestD = Infinity;
+      for (const e of g.entities.values()) {
+        if (e.owner === this.id || e.kind !== 'building' || e.def.segment) continue;
+        const d = Math.hypot(e.x - landed[0].x, e.y - landed[0].y);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (best) g.cmdMove(this.id, landed.map((u) => u.id), best.x, best.y, true);
+    }
+  }
+
+  // The enemy structure whose blast would wreck the most value.
+  pickMissileTarget(weaponKey) {
+    const g = this.game;
+    const splash = WEAPONS[weaponKey].splash;
+    const foes = [...g.entities.values()].filter((e) => e.owner !== this.id && e.kind === 'building' && !e.def.segment);
+    let best = null, bestV = 0;
+    for (const c of foes) {
+      let v = 0;
+      for (const o of foes) if (g.distTo({ x: c.x, y: c.y }, o) <= splash) v += o.def.repairValue ?? o.def.cost;
+      if (v > bestV) { bestV = v; best = c; }
+    }
+    return best;
   }
 
   findThreatNear(center, radius) {

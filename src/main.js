@@ -1,4 +1,4 @@
-import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS } from './config.js';
+import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH } from './config.js';
 import { lineTiles } from './map.js';
 import { Game } from './sim.js';
 import { AIController } from './ai.js';
@@ -44,7 +44,7 @@ function startGame() {
     ui.selected.clear();
     ui.placing = null;
     ui.groups = {};
-    sidebar.build._html = sidebar.fort._html = sidebar.units._html = null;
+    sidebar.build._html = sidebar.fort._html = sidebar.units._html = sidebar.research._html = null;
     const hq = [...game.entities.values()].find((e) => e.owner === ME && e.type === 'hq');
     cam.zoom = CAMERA.defaultDist;
     centerOn(hq.x + 1, hq.y + 2);
@@ -160,6 +160,10 @@ function issueContextOrder(wx, wy, target = null) {
     setRally(wx, wy);
     return;
   }
+  // Transports take a new drop zone; everything else carries on below.
+  const planes = units.filter((u) => u.def.transport);
+  if (planes.length && game.cmdParadrop(ME, planes.map((u) => u.id), wx, wy)) marker(wx, wy, '#7dff8a');
+  if (planes.length === units.length) return;
   const ids = units.map((u) => u.id);
   if (target && target.owner === ME && target.kind === 'building' && target.def.repairs) {
     const sent = game.cmdService(ME, ids, target.id);
@@ -218,6 +222,30 @@ function setRally(wx, wy) {
   }
   refreshSidebar(true);
   return true;
+}
+
+// ICBM targeting: pick a silo's target on the map.
+function startLaunchMode() {
+  const silo = selectedEntities().find((e) => e.owner === ME && e.def.missile && e.progress >= 1);
+  if (!silo) return;
+  if (silo.charge < 1) { notify(`Missile not ready: ${Math.round(silo.charge * 100)}% charged.`, true); return; }
+  ui.launchSilo = silo.id;
+  view.classList.add('cursor-attack');
+  notify('Select the missile target. Right-click or Esc to cancel.', true);
+}
+
+function endLaunchMode() {
+  ui.launchSilo = null;
+  view.classList.remove('cursor-attack');
+}
+
+function launchAt(wx, wy) {
+  if (game.cmdLaunch(ME, ui.launchSilo, wx, wy)) {
+    marker(wx, wy, '#ff3030');
+    notify('Missile launched.', true);
+  }
+  endLaunchMode();
+  refreshSidebar(true);
 }
 
 function startRallyMode() {
@@ -280,6 +308,7 @@ view.addEventListener('pointerdown', (e) => {
     if (ui.placing) { ui.placing = null; ui.lineStart = ui.lineTiles = null; return; }
     if (ui.attackMove) { ui.attackMove = false; view.classList.remove('cursor-attack'); return; }
     if (ui.rallyMode) { endRallyMode(); return; }
+    if (ui.launchSilo) { endLaunchMode(); return; }
     issueContextOrder(w.x, w.y, entityAt(e.offsetX, e.offsetY));
     return;
   }
@@ -303,6 +332,7 @@ view.addEventListener('pointerdown', (e) => {
   }
   if (ui.attackMove) { attackMoveTo(w.x, w.y); return; }
   if (ui.rallyMode) { setRally(w.x, w.y); endRallyMode(); return; }
+  if (ui.launchSilo) { launchAt(w.x, w.y); return; }
   ui.drag = { x0: e.offsetX, y0: e.offsetY, x1: e.offsetX, y1: e.offsetY, shift: e.shiftKey };
 });
 
@@ -379,8 +409,8 @@ window.addEventListener('keydown', (e) => {
       game.cmdStop(ME, myUnits().map((u) => u.id));
       break;
     case 'escape':
-      if (ui.placing || ui.attackMove || ui.rallyMode) {
-        ui.placing = null; ui.attackMove = false; ui.rallyMode = false; ui.lineStart = ui.lineTiles = null; view.classList.remove('cursor-attack');
+      if (ui.placing || ui.attackMove || ui.rallyMode || ui.launchSilo) {
+        ui.placing = null; ui.attackMove = false; ui.rallyMode = false; ui.launchSilo = null; ui.lineStart = ui.lineTiles = null; view.classList.remove('cursor-attack');
       } else {
         ui.selected.clear();
       }
@@ -418,6 +448,9 @@ window.addEventListener('keydown', (e) => {
       refreshSidebar(true);
       break;
     }
+    case 'l':
+      startLaunchMode();
+      break;
     case 'delete': {
       const b = selectedEntities().find((x) => x.kind === 'building' && x.owner === ME);
       if (b) game.cmdSell(ME, b.id);
@@ -471,7 +504,7 @@ function placeFailReason(type, tx, ty) {
 
 const sidebar = {
   build: $('build-list'), fort: $('fort-list'), units: $('unit-list'), sel: $('selection'),
-  credits: $('credits'), clock: $('clock'), status: $('status'),
+  credits: $('credits'), clock: $('clock'), status: $('status'), research: $('research-list'),
 };
 let lastSidebarKey = '';
 
@@ -495,7 +528,7 @@ function refreshSidebar(force = false) {
     const afford = p.credits >= def.cost;
     const isBuilding = constructing && constructing.type === type;
     const cls = ['btn', !unlocked && 'locked', unlocked && !afford && 'poor', ui.placing === type && 'active', isBuilding && 'busy'].filter(Boolean).join(' ');
-    const req = !unlocked ? `Requires ${def.requires.map((r) => BUILDINGS[r].name).join(', ')}` : '';
+    const req = !unlocked ? requirementText(def) : '';
     html += `<button class="${cls}" data-build="${type}" title="${def.name} — $${def.cost}${req ? '\n' + req : ''}">
       <img class="icon" src="${renderer.iconFor('building', type)}" alt=""><span class="name">${def.name}</span><span class="cost">$${def.cost}</span>
       ${isBuilding ? `<span class="prog" style="width:${Math.round(constructing.progress * 100)}%"></span>` : ''}
@@ -540,10 +573,13 @@ function refreshSidebar(force = false) {
         }
       }
       const afford = p.credits >= def.cost;
+      const avail = game.unitAvailable(ME, utype);
       const weapon = def.weapon ? WEAPONS[def.weapon] : null;
-      const role = weapon ? `\nTargets: ${weapon.hits.join(', ')}` : def.scout ? '\nUnarmed scout' : '';
-      const tip = `${def.name} — $${def.cost}\nHP ${def.hp} · Speed ${def.speed} · Sight ${def.sight}${role}\nLeft-click: queue · Right-click: cancel`;
-      html += `<button class="btn${afford ? '' : ' poor'}" data-unit="${utype}" data-producer="${btype}" title="${tip}">
+      const role = weapon ? `\nTargets: ${weapon.hits.join(', ')}` : def.scout ? '\nUnarmed scout' : def.transport ? `\nDrops ${def.drop.count} paratrooper squads at the Airbase rally point` : '';
+      const extra = def.stealth ? '\nStealthy: hidden unless enemies are close' : '';
+      const how = avail ? 'Left-click: queue · Right-click: cancel' : `Research ${TECHS[def.tech].name} at a Research Lab to unlock`;
+      const tip = `${def.name} — $${def.cost}\nHP ${def.hp} · Speed ${def.speed} · Sight ${def.sight}${role}${extra}\n${how}`;
+      html += `<button class="btn${!avail ? ' locked' : afford ? '' : ' poor'}" data-unit="${utype}" data-producer="${btype}" title="${tip}">
         <img class="icon" src="${renderer.iconFor('unit', utype)}" alt=""><span class="name">${def.name}</span><span class="cost">$${def.cost}</span>
         ${queued ? `<span class="badge">${queued}</span>` : ''}
         ${prog > 0 ? `<span class="prog" style="width:${Math.round(prog * 100)}%"></span>` : ''}
@@ -553,9 +589,32 @@ function refreshSidebar(force = false) {
   if (!html) html = '<div class="hint">Build a Barracks to train troops.</div>';
   if (html !== sidebar.units._html) { sidebar.units.innerHTML = html; sidebar.units._html = html; }
 
+  // Research: points from labs, spent on technologies.
+  const res = p.research;
+  const labs = [...game.entities.values()].filter((e) => e.owner === ME && e.def.research && e.progress >= 1);
+  const running = labs.filter((b) => !b.researchPaused && !b.researchStalled).length;
+  html = `<div class="research-head"><span>${Math.floor(res.points)} pts</span><span class="hint">${labs.length
+    ? `+${running * RESEARCH.rate}/s · $${running * RESEARCH.cost}/s`
+    : game.canBuildType(ME, 'lab') ? 'Build a Research Lab' : 'Research Lab requires a Vehicle Plant'}</span></div>`;
+  for (const key of TECH_ORDER) {
+    const t = TECHS[key];
+    const done = res.done.has(key);
+    const open = game.canResearch(ME, key);
+    const ready = open && res.points >= t.points;
+    const icon = t.unit ? renderer.iconFor('unit', t.unit) : t.building ? renderer.iconFor('building', t.building) : renderer.iconFor('unit', key === 'armor' ? 'tank' : 'drone');
+    const reqs = (t.requires || []).filter((r) => !res.done.has(r)).map((r) => TECHS[r].name);
+    const tip = `${t.name} — ${t.points} research points\n${t.desc}${reqs.length ? `\nRequires ${reqs.join(', ')}` : ''}${done ? '\nResearched' : ''}`;
+    const cls = ['btn', done && 'done', !done && !open && 'locked', open && !ready && 'poor'].filter(Boolean).join(' ');
+    const prog = open && !ready ? `<span class="prog" style="width:${Math.round((100 * res.points) / t.points)}%"></span>` : '';
+    html += `<button class="${cls}" data-tech="${key}" title="${tip}">
+      <img class="icon" src="${icon}" alt=""><span class="name">${t.name}</span><span class="cost">${done ? '✓ Done' : `${t.points} pts`}</span>${prog}
+    </button>`;
+  }
+  if (html !== sidebar.research._html) { sidebar.research.innerHTML = html; sidebar.research._html = html; }
+
   // Selection panel.
   const sel = selectedEntities();
-  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${e.rally ? e.rally.x.toFixed(1) + ',' + e.rally.y.toFixed(1) + ',' + e.rally.well : '-'}:${game.tick - (e.repairedAt ?? -1e9) < 10}`).join('|');
+  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${e.rally ? e.rally.x.toFixed(1) + ',' + e.rally.y.toFixed(1) + ',' + e.rally.well : '-'}:${game.tick - (e.repairedAt ?? -1e9) < 10}:${e.researchPaused}:${e.researchStalled}:${Math.floor((e.charge || 0) * 100)}:${e.dropT > 0}`).join('|');
   if (!force && key === lastSidebarKey) return;
   lastSidebarKey = key;
   if (!sel.length) { sidebar.sel.innerHTML = '<div class="hint">Nothing selected.</div>'; return; }
@@ -569,11 +628,23 @@ function refreshSidebar(force = false) {
       if (w) detail += `<div>Weapon range ${w.range} · hits ${w.hits.join('/')}</div>`;
       else if (e.def.scout) detail += `<div>Unarmed scout · sight ${e.def.sight}</div>`;
       if (e.def.harvester) detail += `<div>Cargo: ${Math.round(e.cargo)} / 150</div>`;
+      if (e.def.transport && e.owner === ME) detail += `<div class="hint">${e.order.dropped ? 'Returning to base' : 'Right-click to change the drop zone'}</div>`;
+      if (e.def.stealth) detail += '<div class="hint">Stealthy: hidden unless enemies are within a few tiles</div>';
       if (e.owner === ME && e.hp < e.maxHp) detail += `<div class="hint">${repairHint(e)}</div>`;
     } else {
       if (e.progress < 1) detail += `<div>Under construction: ${Math.round(e.progress * 100)}%</div>`;
       if (e.queue?.length) detail += `<div>Queue: ${e.queue.map((q) => UNITS[q.type].name).join(', ')}</div>`;
       if (e.def.repairs) detail += `<div class="hint">Repairs ${{ ground: 'vehicles', air: 'aircraft', naval: 'ships' }[e.def.repairs]} nearby</div>`;
+      if (e.def.research && e.progress >= 1 && e.owner === ME) {
+        const state = e.researchPaused ? '<span class="warn-text">Paused</span>'
+          : e.researchStalled ? '<span class="warn-text">Stalled: insufficient funds</span>'
+            : `<span class="ok-text">Researching: +${RESEARCH.rate} pt/s for $${RESEARCH.cost}/s</span>`;
+        detail += `<div>${state}</div><div class="btn-row"><button class="small" data-lab="${e.id}">${e.researchPaused ? 'Resume research' : 'Pause research'}</button></div>`;
+      }
+      if (e.def.missile && e.progress >= 1) {
+        detail += e.charge >= 1 ? '<div class="warn-text">Missile ready</div>' : `<div>Missile charging: ${Math.floor(e.charge * 100)}%</div>`;
+        if (e.owner === ME) detail += `<div class="btn-row"><button class="small"${e.charge >= 1 ? '' : ' disabled'} data-launch="${e.id}">Launch missile (L)</button></div>`;
+      }
       if (e.owner === ME && e.def.produces) {
         const status = !e.rally ? 'none' : e.rally.well != null ? 'oil well (new trucks harvest it)' : 'set';
         detail += `<div>Rally point: ${status}</div>`;
@@ -601,6 +672,15 @@ function refreshSidebar(force = false) {
         ? `<div class="btn-row"><button class="small" data-rallyset="1">Set rally point (${producers.length})</button><button class="small" data-rallyclear="1">Clear</button></div>`
         : '<div class="hint">A: attack-move · S: stop · Ctrl+1-9: group</div>');
   }
+}
+
+// What a locked structure still needs: prerequisite buildings and research.
+function requirementText(def) {
+  const parts = [];
+  const missing = def.requires.filter((r) => !game.hasBuilding(ME, r));
+  if (missing.length || !def.tech) parts.push(`Requires ${def.requires.map((r) => BUILDINGS[r].name).join(', ')}`);
+  if (def.tech && !game.hasTech(ME, def.tech)) parts.push(`Research ${TECHS[def.tech].name} at a Research Lab`);
+  return parts.join(' · ');
 }
 
 function repairHint(u) {
@@ -632,6 +712,8 @@ function sendForRepair(units) {
 }
 
 function describeOrder(u) {
+  if (u.dropT > 0) return 'Parachuting';
+  if (u.order.type === 'paradrop') return u.order.dropped ? 'Returning' : 'Flying to drop zone';
   if (game.tick - (u.repairedAt ?? -1e9) < 10) return u.def.armor === 'infantry' ? 'Healing' : 'Being repaired';
   if (u.order.type === 'harvest') return { toWell: 'Heading to oil', loading: 'Pumping oil', toDropoff: 'Returning cargo' }[u.harvestState] || 'Harvesting';
   if (u.order.type === 'attack') return 'Attacking';
@@ -657,13 +739,14 @@ $('sidebar').addEventListener('pointerdown', (e) => {
   } else if (btn.dataset.build) {
     const type = btn.dataset.build;
     const def = BUILDINGS[type];
-    if (!game.canBuildType(ME, type)) return notify(`Requires ${def.requires.map((r) => BUILDINGS[r].name).join(', ')}.`, true);
+    if (!game.canBuildType(ME, type)) return notify(`${requirementText(def)}.`, true);
     if (game.players[ME].constructing) return notify('Already constructing a structure.', true);
     if (game.players[ME].credits < def.cost) return notify('Insufficient funds.', true);
     ui.placing = ui.placing === type ? null : type;
     if (ui.placing) notify(`Place ${def.name}. Right-click to cancel.`);
   } else if (btn.dataset.unit) {
     const type = btn.dataset.unit, btype = btn.dataset.producer;
+    if (!game.unitAvailable(ME, type)) return notify(`Research ${TECHS[UNITS[type].tech].name} at a Research Lab first.`, true);
     const blds = [...game.entities.values()].filter((b) => b.owner === ME && b.type === btype && b.progress >= 1);
     if (e.button === 2) {
       const b = blds.find((x) => x.queue.some((q) => q.type === type));
@@ -683,6 +766,17 @@ $('sidebar').addEventListener('pointerdown', (e) => {
       if (!ok) notify(game.players[ME].credits < UNITS[type].cost ? 'Insufficient funds.' : 'Production queue full.', true);
       else audio.blip(990);
     }
+  } else if (btn.dataset.tech) {
+    const key = btn.dataset.tech, t = TECHS[key];
+    const res = game.players[ME].research;
+    if (res.done.has(key)) return notify(`${t.name} already researched.`);
+    if (!game.canResearch(ME, key)) return notify(`Requires ${t.requires.map((r) => TECHS[r].name).join(', ')}.`, true);
+    if (res.points < t.points) return notify(`Need ${t.points - Math.floor(res.points)} more research points.`, true);
+    game.cmdResearch(ME, key);
+  } else if (btn.dataset.lab) {
+    game.cmdLabToggle(ME, Number(btn.dataset.lab));
+  } else if (btn.dataset.launch) {
+    startLaunchMode();
   } else if (btn.dataset.rallyset) {
     startRallyMode();
   } else if (btn.dataset.rallyclear) {
@@ -712,11 +806,20 @@ function notify(text, warn = false) {
 
 function handleGameEvents() {
   for (const ev of game.events) {
+    // Enemy missile launches are detected wherever they happen.
+    if (ev.type === 'launch' && ev.owner !== ME) {
+      notify('Warning: enemy missile launch detected!', true);
+      marker(ev.tx, ev.ty, '#ff3030');
+      audio.blip(300);
+    }
     if (ev.owner !== ME) continue;
     if (ev.type === 'built') { notify(`${BUILDINGS[ev.building].name} complete.`); audio.blip(740); }
     else if (ev.type === 'unitReady') audio.blip(1100);
     else if (ev.type === 'stranded') { notify(`Out of funds and trucks. Command is sending a Supply Truck in ${ev.delay}s.`, true); audio.blip(440); }
     else if (ev.type === 'emergencyTruck') { notify('Emergency Supply Truck has arrived.'); audio.blip(880); }
+    else if (ev.type === 'researched') { notify(`Research complete: ${TECHS[ev.tech].name}.`); audio.blip(1200); }
+    else if (ev.type === 'missileReady') { notify('Missile ready. Select the silo and press L to launch.', true); audio.blip(520); }
+    else if (ev.type === 'paradrop') notify('Paratroopers away!');
     else if (ev.type === 'underAttack' && game.time - lastUnderAttack > 12) {
       lastUnderAttack = game.time;
       notify('Our base is under attack!', true);

@@ -18,9 +18,9 @@ export const CAMERA = { minDist: 7, maxDist: 58, defaultDist: 24 };
 const DECAL_LIFE = 30; // seconds a scorch mark stays on the ground
 const DECAL_FADE = 8; // seconds spent fading out at the end
 const SUN_DIR = new THREE.Vector3(-0.55, 1.0, -0.42).normalize();
-const AIR_ALT = { drone: 3.4, heli: 1.9, fighter: 2.9, bomber: 3.2 };
+const AIR_ALT = { drone: 3.4, heli: 1.9, fighter: 2.9, bomber: 3.2, strikedrone: 2.6, paratroopers: 3.6 };
 // Units are drawn larger than their footprint so they read at strategy zoom.
-const UNIT_SCALE = { drone: 1.4, infantry: 1.35, rocketeer: 1.35, truck: 1.15, scout: 1.15, tank: 1.15, aa: 1.15, artillery: 1.1, heli: 1.15, fighter: 1.05, bomber: 0.9, gunboat: 1.1, destroyer: 1.05 };
+const UNIT_SCALE = { commando: 1.35, para: 1.35, strikedrone: 1.25, submarine: 1.15, paratroopers: 1.35, drone: 1.4, infantry: 1.35, rocketeer: 1.35, truck: 1.15, scout: 1.15, tank: 1.15, aa: 1.15, artillery: 1.1, heli: 1.15, fighter: 1.05, bomber: 0.9, gunboat: 1.1, destroyer: 1.05 };
 
 export class Renderer3D {
   constructor(canvas, overlay, game, viewer = 0, quality = 'high') {
@@ -328,8 +328,14 @@ export class Renderer3D {
           break;
         }
         case 'impact': {
-          if (!vis) break;
-          if (ev.air) P.airBurst(ev.x, this.heightFor(ev.x, ev.y, true), ev.y);
+          if (!vis && ev.fx !== 'icbm') break; // a missile strike is seen from afar
+          if (ev.fx === 'icbm') {
+            const h = this.hf.groundAt(ev.x, ev.y);
+            P.mushroom(ev.x, h, ev.y, ev.splash);
+            this.addDecal(ev.x, ev.y, ev.splash * 1.6);
+            this.paintDirt(ev.x - 0.5, ev.y - 0.5, 1, 1, ev.splash * 1.1, 0.95);
+            audio?.play('explode', ev.x, ev.y, 6);
+          } else if (ev.air) P.airBurst(ev.x, this.heightFor(ev.x, ev.y, true), ev.y);
           else {
             const h = this.hf.groundAt(ev.x, ev.y);
             P.impact(ev.x, h, ev.y, ev.splash);
@@ -354,6 +360,10 @@ export class Renderer3D {
           }
           break;
         }
+        case 'launch':
+          P.launchPlume(ev.x, this.hf.groundAt(ev.x, ev.y) + 0.4, ev.y);
+          audio?.play('launch', ev.x, ev.y);
+          break;
         case 'built':
           if (ev.owner === this.viewer) {
             const def = BUILDINGS[ev.building];
@@ -529,6 +539,13 @@ export class Renderer3D {
       const base = v.root.position;
       this.particles.weld(base.x + (Math.random() - 0.5) * e.w * 0.8, base.y + 0.3 + Math.random() * 0.7, base.z + (Math.random() - 0.5) * e.h * 0.8);
     }
+    if (v.parts.doors) {
+      // Blast doors open and the missile rises once it's charged.
+      const ready = built && e.charge >= 1 ? 1 : 0;
+      v.siloOpen = (v.siloOpen ?? 0) + (ready - (v.siloOpen ?? 0)) * Math.min(1, dt * 1.5);
+      v.parts.doors.forEach((d, i) => { d.position.x = (i ? 1 : -1) * (0.46 + v.siloOpen * 0.44); });
+      v.parts.missile.position.y = -0.6 + v.siloOpen * 1.55;
+    }
     if (v.parts.turret && e.target != null) {
       const t = this.game.get(e.target);
       if (t) v.parts.turret.rotation.y = approachAngle(v.parts.turret.rotation.y, -Math.atan2(t.y - e.y, t.x - e.x), dt * 4);
@@ -571,6 +588,7 @@ export class Renderer3D {
         v.parts.rotor.rotation.y += dt * 28;
         v.parts.tailRotor.rotation.z += dt * 40;
       }
+      if (v.parts.props) for (const pr of v.parts.props) pr.rotation.x += dt * 40;
       if (v.parts.rotors) {
         v.parts.rotors.forEach((rt, i) => { rt.rotation.y += dt * (i % 2 ? -45 : 45); });
         v.body.rotation.z = -Math.min(0.3, speed * 0.05);
@@ -580,7 +598,8 @@ export class Renderer3D {
         P.trail(back.x, back.y, back.z);
       }
     } else if (domain === 'naval') {
-      r.position.set(x, WATER_LEVEL + Math.sin(this.time * 1.3 + e.id) * 0.025, z);
+      const draft = e.def.stealth ? -0.07 : 0; // submarines run low in the water
+      r.position.set(x, WATER_LEVEL + draft + Math.sin(this.time * 1.3 + e.id) * 0.025, z);
       v.body.rotation.x = Math.sin(this.time * 1.1 + e.id) * 0.03;
       v.body.rotation.z = Math.sin(this.time * 0.9 + e.id * 2) * 0.02;
       if (speed > 0.3 && Math.random() < dt * 25) {
@@ -590,7 +609,10 @@ export class Renderer3D {
     } else {
       const h = this.hf.groundAt(x, z);
       const bob = e.def.armor === 'infantry' && speed > 0.2 ? Math.abs(Math.sin(this.time * 12 + e.id)) * 0.03 : 0;
-      r.position.set(x, h + bob, z);
+      // Paratroopers drift down under canopy until they land.
+      const fall = e.dropT > 0 ? e.dropT * 2.2 : 0;
+      if (v.parts.chute) v.parts.chute.visible = fall > 0;
+      r.position.set(x, h + bob + fall, z);
       // Tilt vehicles to follow the slope.
       const ca = Math.cos(ang), sa = Math.sin(ang), d = 0.35;
       const hf = this.hf.groundAt(x + ca * d, z + sa * d), hb = this.hf.groundAt(x - ca * d, z - sa * d);
@@ -652,16 +674,23 @@ export class Renderer3D {
   updateProjectiles() {
     const P = this.particles;
     for (const p of this.game.projectiles) {
-      if (!this.tileVisible(p.x, p.y)) continue;
+      if (p.weapon !== 'icbm' && !this.tileVisible(p.x, p.y)) continue;
       const w = WEAPONS[p.weapon];
       const total = Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1;
       const t = Math.max(0, Math.min(1, 1 - Math.hypot(p.tx - p.x, p.ty - p.y) / total));
       const y0 = p.fromAir ? this.heightFor(p.sx, p.sy, true) : this.hf.groundAt(p.sx, p.sy) + 0.35;
       const y1 = p.air ? this.heightFor(p.tx, p.ty, true) : this.hf.groundAt(p.tx, p.ty) + 0.2;
       let y = y0 + (y1 - y0) * t;
-      if (w.arc) y += Math.sin(t * Math.PI) * Math.min(6, total * 0.45);
+      if (w.arc) y += Math.sin(t * Math.PI) * (w.arcHeight ?? Math.min(6, total * 0.45));
+      if (w.fx === 'torpedo') {
+        // Runs just under the surface, leaving a bubble wake.
+        P.projectile(p.x, WATER_LEVEL - 0.02, p.y, 'bullet');
+        P.trail(p.x, WATER_LEVEL + 0.02, p.y);
+        continue;
+      }
       P.projectile(p.x, y, p.y, w.fx);
       if (w.fx === 'rocket' || w.fx === 'artillery') P.trail(p.x, y, p.y);
+      if (w.fx === 'icbm') P.missileTrail(p.x, y, p.y);
     }
   }
 
