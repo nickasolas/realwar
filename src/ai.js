@@ -53,7 +53,14 @@ export class AIController {
     if (g.time < this.nextThink) return;
     this.nextThink = g.time + this.cfg.thinkEvery;
 
-    this.manageEconomy();
+    // With no trucks, every credit goes toward the next one (the Command
+    // Center's income or its emergency truck will get the economy going).
+    if (this.manageEconomy()) {
+      for (const b of this.mine((e) => e.kind === 'building' && e.repairing)) g.cmdRepair(this.id, b.id, false);
+      this.manageArmy();
+      this.manageScouting();
+      return;
+    }
     this.manageConstruction();
     this.manageProduction();
     this.manageRepairs();
@@ -116,10 +123,15 @@ export class AIController {
         if (well >= 0) this.game.cmdHarvest(this.id, [t.id], well);
       }
     }
-    const hq = this.mine((e) => e.type === 'hq')[0];
-    if (hq && trucks.length < this.cfg.maxTrucks && hq.queue.length === 0 && this.player.credits >= UNITS.truck.cost) {
-      this.game.cmdQueue(this.id, hq.id, 'truck');
+    // Trucks come from the Command Center, or a Vehicle Plant if it's gone.
+    const yards = this.mine((e) => e.kind === 'building' && e.progress >= 1 && e.def.produces?.includes('truck'));
+    const yard = yards.find((b) => b.type === 'hq') || yards[0];
+    const queued = yards.some((b) => b.queue.some((q) => UNITS[q.type].harvester));
+    if (yard && trucks.length < this.cfg.maxTrucks && !queued && yard.queue.length === 0 && this.player.credits >= UNITS.truck.cost) {
+      this.game.cmdQueue(this.id, yard.id, 'truck');
     }
+    // True when the economy has stalled: no trucks working or on order.
+    return trucks.length === 0 && !yards.some((b) => b.queue.some((q) => UNITS[q.type].harvester));
   }
 
   manageConstruction() {

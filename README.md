@@ -30,7 +30,11 @@ npm start            # http://localhost:8080
 ## How it plays
 
 - **Economy:** Supply Trucks pump oil from wells and haul it to a Command
-  Center or Supply Depot. Wells run dry, so expansion matters.
+  Center or Supply Depot. Wells run dry, so expansion matters. A standing
+  Command Center pays a small income ($5/s), and a player left with no trucks
+  and too little money to buy one gets a free truck from it after 90 seconds
+  (the sidebar counts down). The AI saves every credit for a truck when it has
+  none.
 - **Base building:** Structures are placed from the sidebar within range of your
   base, one at a time. Tech tree: Command Center → Barracks → Vehicle Plant →
   Airbase / Service Depot; Barracks → Naval Yard (on the open-sea shoreline; ponds don't count); plus Gun Turrets and SAM Sites.

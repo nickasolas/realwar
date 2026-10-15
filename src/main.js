@@ -479,6 +479,10 @@ function refreshSidebar(force = false) {
   if (!game) return;
   const p = game.players[ME];
   sidebar.credits.textContent = `$${Math.floor(p.credits).toLocaleString()}`;
+  // While stranded (broke, no trucks), count down to the free truck.
+  const left = p.emergencyAt != null ? Math.max(0, Math.ceil(p.emergencyAt - game.time)) : 0;
+  const fundsLabel = p.emergencyAt != null ? `Funds · truck ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'Funds';
+  if ($('funds-label').textContent !== fundsLabel) $('funds-label').textContent = fundsLabel;
   const t = Math.floor(game.time);
   sidebar.clock.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 
@@ -711,6 +715,8 @@ function handleGameEvents() {
     if (ev.owner !== ME) continue;
     if (ev.type === 'built') { notify(`${BUILDINGS[ev.building].name} complete.`); audio.blip(740); }
     else if (ev.type === 'unitReady') audio.blip(1100);
+    else if (ev.type === 'stranded') { notify(`Out of funds and trucks. Command is sending a Supply Truck in ${ev.delay}s.`, true); audio.blip(440); }
+    else if (ev.type === 'emergencyTruck') { notify('Emergency Supply Truck has arrived.'); audio.blip(880); }
     else if (ev.type === 'underAttack' && game.time - lastUnderAttack > 12) {
       lastUnderAttack = game.time;
       notify('Our base is under attack!', true);

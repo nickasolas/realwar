@@ -99,6 +99,12 @@ export const ROAD = { name: 'Road', cost: 15, requires: ['hq'] };
 // Longest line a single wall or road drag can place.
 export const MAX_LINE = 40;
 
+// Safety nets so a player can never be permanently broke.
+export const ECONOMY = {
+  hqIncome: 5, // credits per second from a standing Command Center
+  emergencyTruckDelay: 90, // seconds broke with no trucks before the HQ sends a free one
+};
+
 // Repair rules. Rates are fractions of max HP per second; costs are the
 // share of an item's price paid for a full 0-to-100% repair.
 export const REPAIR = {

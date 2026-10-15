@@ -1,6 +1,6 @@
 import {
   DT, TICK_RATE, UNITS, BUILDINGS, WEAPONS, FACTIONS, STARTING_CREDITS,
-  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR, ROAD, MAX_LINE,
+  TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR, ROAD, MAX_LINE, ECONOMY,
 } from './config.js';
 import { generateMap } from './map.js';
 import { Terrain } from './config.js';
@@ -44,6 +44,7 @@ export class Game {
       credits: STARTING_CREDITS,
       defeated: false,
       constructing: null, // id of the structure currently being built
+      emergencyAt: null, // game time a free truck arrives while stranded
       visible: new Uint8Array(this.map.w * this.map.h),
       explored: new Uint8Array(this.map.w * this.map.h),
       stats: { killed: 0, lost: 0, harvested: 0, repairSpent: 0 },
@@ -937,8 +938,42 @@ export class Game {
     this.separate(units.filter((u) => this.entities.has(u.id)));
     this.updateProjectiles();
     if (this.tick % REPAIR_INTERVAL === 0) this.updateRepairs();
+    if (this.tick % TICK_RATE === 0) this.updateEconomy();
     if (this.tick % FOG_INTERVAL === 0) this.updateFog();
     this.checkVictory();
+  }
+
+  // -------------------------------------------------------------- economy
+
+  // Runs once a second. A standing Command Center pays a small income, and a
+  // player left with no trucks and too little money to buy one gets a free
+  // truck from the Command Center after a delay.
+  updateEconomy() {
+    for (const p of this.players) {
+      if (p.defeated) continue;
+      let hq = null, trucks = 0;
+      for (const e of this.entities.values()) {
+        if (e.owner !== p.id) continue;
+        if (e.type === 'hq' && e.progress >= 1) hq = e;
+        if (e.def.harvester) trucks++;
+        else if (e.kind === 'building' && e.queue?.some((q) => UNITS[q.type].harvester)) trucks++;
+      }
+      if (!hq) { p.emergencyAt = null; continue; }
+      p.credits += ECONOMY.hqIncome;
+      if (!this.isStranded(p, trucks)) { p.emergencyAt = null; continue; }
+      if (p.emergencyAt == null) {
+        p.emergencyAt = this.time + ECONOMY.emergencyTruckDelay;
+        this.events.push({ type: 'stranded', owner: p.id, delay: ECONOMY.emergencyTruckDelay });
+      } else if (this.time >= p.emergencyAt && this.spawnFrom(hq, 'truck')) {
+        p.emergencyAt = null;
+        this.events.push({ type: 'emergencyTruck', owner: p.id });
+      }
+    }
+  }
+
+  // No trucks (built or queued), can't afford one, and oil left to pump.
+  isStranded(p, trucks) {
+    return trucks === 0 && p.credits < UNITS.truck.cost && this.map.wells.some((w) => w.amount > 0);
   }
 
   // --------------------------------------------------------------- repair

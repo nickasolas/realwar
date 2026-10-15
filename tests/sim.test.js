@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game, damageAgainst } from '../src/sim.js';
 import { AIController } from '../src/ai.js';
-import { UNITS, BUILDINGS, WEAPONS, STARTING_CREDITS, TICK_RATE } from '../src/config.js';
+import { UNITS, BUILDINGS, WEAPONS, STARTING_CREDITS, TICK_RATE, ECONOMY } from '../src/config.js';
 
 const run = (g, seconds, ais = []) => {
   for (let i = 0; i < seconds * TICK_RATE; i++) {
@@ -188,7 +188,8 @@ test('repair pauses without funds and resumes when money arrives', () => {
   b.hp = 100;
   g.players[0].credits = 0;
   g.cmdRepair(0, b.id, true);
-  run(g, 2);
+  // Keep the treasury empty (the Command Center pays a small income).
+  for (let i = 0; i < 2 * TICK_RATE; i++) { g.players[0].credits = 0; g.step(); g.events.length = 0; }
   assert.equal(b.hp, 100);
   assert.equal(b.repairStalled, true);
   g.players[0].credits = 5000;
@@ -524,4 +525,52 @@ test('rallying onto the structure itself clears the rally point; unarmed units j
   assert.equal(drone.order.type, 'move', 'unarmed drone moves rather than attack-moves');
   assert.equal(g.cmdRally(0, hq.id, hq.x, hq.y), 'cleared');
   assert.equal(hq.rally, null);
+});
+
+test('a standing Command Center pays a small income', () => {
+  const g = new Game({ seed: 3 });
+  const p = g.players[0];
+  for (const e of [...g.entities.values()]) if (e.owner === 0 && e.kind === 'unit') g.entities.delete(e.id);
+  const before = p.credits;
+  run(g, 10);
+  assert.equal(p.credits - before, ECONOMY.hqIncome * 10);
+});
+
+test('a broke player with no trucks gets a free one after a delay', () => {
+  const g = new Game({ seed: 3 });
+  const p = g.players[0];
+  for (const e of [...g.entities.values()]) if (e.owner === 0 && e.def.harvester) g.entities.delete(e.id);
+  const trucks = () => [...g.entities.values()].filter((e) => e.owner === 0 && e.def.harvester).length;
+  const stranded = [];
+  for (let i = 0; i < (ECONOMY.emergencyTruckDelay + 3) * TICK_RATE; i++) {
+    p.credits = 0;
+    g.step();
+    for (const ev of g.events) if (ev.owner === 0 && (ev.type === 'stranded' || ev.type === 'emergencyTruck')) stranded.push(ev.type);
+    g.events.length = 0;
+    if (i === (ECONOMY.emergencyTruckDelay - 5) * TICK_RATE) assert.equal(trucks(), 0, 'not before the delay');
+  }
+  assert.deepEqual(stranded, ['stranded', 'emergencyTruck']);
+  assert.equal(trucks(), 1);
+  const t = [...g.entities.values()].find((e) => e.owner === 0 && e.def.harvester);
+  assert.equal(t.order.type, 'harvest', 'the free truck goes straight to work');
+});
+
+test('no free truck while the player can afford one', () => {
+  const g = new Game({ seed: 3 });
+  for (const e of [...g.entities.values()]) if (e.owner === 0 && e.def.harvester) g.entities.delete(e.id);
+  g.players[0].credits = 1000;
+  run(g, ECONOMY.emergencyTruckDelay + 5);
+  assert.equal([...g.entities.values()].filter((e) => e.owner === 0 && e.def.harvester).length, 0);
+  assert.equal(g.players[0].emergencyAt, null);
+});
+
+test('an AI that loses its trucks saves for a new one', () => {
+  const g = new Game({ seed: 3, players: [{ ai: false }, { ai: true }] });
+  const ai = new AIController(g, 1, 'normal');
+  for (const e of [...g.entities.values()]) if (e.owner === 1 && e.def.harvester) g.entities.delete(e.id);
+  g.players[1].credits = 400;
+  run(g, 60, [ai]);
+  const trucks = [...g.entities.values()].filter((e) => e.owner === 1 && e.def.harvester).length;
+  const queued = [...g.entities.values()].some((e) => e.owner === 1 && e.queue?.some((q) => q.type === 'truck'));
+  assert.ok(trucks > 0 || queued, 'bought a truck from the Command Center income');
 });
