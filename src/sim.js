@@ -279,11 +279,20 @@ export class Game {
     return u.def.armor === 'infantry' ? 'infantry' : u.def.domain;
   }
 
+  // Set where a production structure sends new units. A point on an oil
+  // well also tells new trucks which well to work; a point on the structure
+  // itself clears the rally. Returns 'set', 'cleared' or false.
   cmdRally(playerId, buildingId, x, y) {
     const b = this.get(buildingId);
-    if (!b || b.owner !== playerId || b.kind !== 'building') return false;
-    b.rally = { x, y };
-    return true;
+    if (!b || b.owner !== playerId || b.kind !== 'building' || !b.def.produces) return false;
+    if (x >= b.tx && x < b.tx + b.w && y >= b.ty && y < b.ty + b.h) {
+      b.rally = null;
+      return 'cleared';
+    }
+    const well = this.map.wells.findIndex((w) => Math.hypot(w.x + 0.5 - x, w.y + 0.5 - y) < 0.9);
+    b.rally = { x, y, well: well >= 0 ? well : null };
+    b.rallyCount = 0;
+    return 'set';
   }
 
   cmdPlace(playerId, type, tx, ty) {
@@ -850,10 +859,17 @@ export class Game {
     if (!spot) return false;
     const u = this.addUnit(b.owner, type, spot.x + 0.5, spot.y + 0.5);
     this.events.push({ type: 'unitReady', owner: b.owner, unit: type, x: u.x, y: u.y });
-    if (b.rally) this.cmdMove(b.owner, [u.id], b.rally.x, b.rally.y);
-    else if (def.harvester) {
-      const well = this.chooseWell(u);
-      if (well >= 0) this.cmdHarvest(b.owner, [u.id], well);
+    const r = b.rally;
+    if (def.harvester) {
+      // Trucks only take a rally point that marks a well; otherwise they go to work.
+      const want = r && r.well != null && this.map.wells[r.well]?.amount > 0 ? r.well : this.chooseWell(u);
+      if (want >= 0) this.cmdHarvest(b.owner, [u.id], want);
+    } else if (r) {
+      // Spread arrivals in a spiral around the rally point so they don't stack;
+      // armed units attack-move so they fight anything they meet on the way.
+      const k = b.rallyCount = (b.rallyCount || 0) + 1;
+      const n = (k - 1) % 16, rad = n ? 0.8 * Math.sqrt(n) : 0, ang = n * 2.39996;
+      this.cmdMove(b.owner, [u.id], r.x + Math.cos(ang) * rad, r.y + Math.sin(ang) * rad, !!def.weapon);
     } else {
       // Step off the doorstep.
       u.order = { type: 'move' };

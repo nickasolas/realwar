@@ -466,3 +466,62 @@ test('trucks spread across wells and share a pump through loading bays', () => {
   assert.ok(maxPerWell < trucks.length, `trucks spread over more than one well (worst ${maxPerWell})`);
   assert.ok(g.players[0].stats.harvested > 3000, 'income keeps flowing');
 });
+
+// ------------------------------------------------------------- rally points
+
+test('new units deploy to the rally point, spread out, armed ones attack-moving', () => {
+  const g = new Game({ seed: 3 });
+  const hq = openStrip(g);
+  const bar = g.addBuilding(0, 'barracks', Math.floor(hq.x) - 6, Math.floor(hq.y) - 4, true);
+  const rx = hq.x + 2, ry = hq.y + 4;
+  assert.equal(g.cmdRally(0, bar.id, rx, ry), 'set');
+  assert.equal(g.cmdRally(1, bar.id, rx, ry), false, "can't set another player's rally");
+  for (let i = 0; i < 3; i++) g.cmdQueue(0, bar.id, 'infantry');
+  // Record each squad's orders the moment it rolls out.
+  const squads = [];
+  const seen = new Set();
+  for (let i = 0; i < (UNITS.infantry.buildTime * 3 + 1) * TICK_RATE; i++) {
+    g.step(); g.events.length = 0;
+    for (const e of g.entities.values()) {
+      if (e.owner === 0 && e.type === 'infantry' && !seen.has(e.id)) { seen.add(e.id); squads.push({ type: e.order.type, dest: { ...e.order.dest } }); }
+    }
+  }
+  assert.equal(squads.length, 3);
+  for (const s of squads) {
+    assert.equal(s.type, 'attackMove');
+    assert.ok(Math.hypot(s.dest.x - rx, s.dest.y - ry) < 2, 'heading to the rally point');
+  }
+  const dests = new Set(squads.map((s) => `${s.dest.x.toFixed(2)},${s.dest.y.toFixed(2)}`));
+  assert.equal(dests.size, 3, 'each gets its own spot');
+});
+
+test('trucks follow a rally point only when it marks an oil well', () => {
+  const g = new Game({ seed: 3 });
+  const hq = find(g, 0, 'hq');
+  const far = g.map.wells.map((w, i) => ({ w, i })).sort((a, b) => Math.hypot(b.w.x - hq.x, b.w.y - hq.y) - Math.hypot(a.w.x - hq.x, a.w.y - hq.y))[0];
+  g.cmdRally(0, hq.id, far.w.x + 0.5, far.w.y + 0.5);
+  assert.equal(hq.rally.well, far.i);
+  g.cmdQueue(0, hq.id, 'truck');
+  run(g, UNITS.truck.buildTime + 0.5);
+  const t1 = [...g.entities.values()].filter((e) => e.type === 'truck' && e.owner === 0).pop();
+  assert.equal(t1.order.type, 'harvest');
+  assert.equal(t1.well, far.i, 'harvests the rallied well');
+  // A plain ground rally point is ignored by trucks: they go to work.
+  g.cmdRally(0, hq.id, hq.x + 3, hq.y + 5);
+  g.cmdQueue(0, hq.id, 'truck');
+  run(g, UNITS.truck.buildTime + 0.5);
+  const t2 = [...g.entities.values()].filter((e) => e.type === 'truck' && e.owner === 0).pop();
+  assert.equal(t2.order.type, 'harvest');
+});
+
+test('rallying onto the structure itself clears the rally point; unarmed units just move', () => {
+  const g = new Game({ seed: 3 });
+  const hq = find(g, 0, 'hq');
+  g.cmdRally(0, hq.id, hq.x + 6, hq.y + 6);
+  g.cmdQueue(0, hq.id, 'drone');
+  run(g, UNITS.drone.buildTime + 0.5);
+  const drone = find(g, 0, 'drone');
+  assert.equal(drone.order.type, 'move', 'unarmed drone moves rather than attack-moves');
+  assert.equal(g.cmdRally(0, hq.id, hq.x, hq.y), 'cleared');
+  assert.equal(hq.rally, null);
+});

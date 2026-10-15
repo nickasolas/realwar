@@ -156,8 +156,8 @@ function issueContextOrder(wx, wy, target = null) {
   const units = myUnits();
   const sel = selectedEntities();
   if (!units.length) {
-    const b = sel.find((e) => e.kind === 'building' && e.owner === ME && e.def.produces);
-    if (b) { game.cmdRally(ME, b.id, wx, wy); marker(wx, wy, '#7dff8a'); }
+    // Only structures selected: right-click sets their rally point.
+    setRally(wx, wy);
     return;
   }
   const ids = units.map((u) => u.id);
@@ -199,6 +199,38 @@ function issueContextOrder(wx, wy, target = null) {
 }
 
 function marker(x, y, color) { ui.markers.push({ x, y, color }); }
+
+function selectedProducers() {
+  return selectedEntities().filter((e) => e.kind === 'building' && e.owner === ME && e.def.produces);
+}
+
+// Point every selected production structure at (wx, wy).
+function setRally(wx, wy) {
+  const producers = selectedProducers();
+  if (!producers.length) return false;
+  const results = producers.map((b) => game.cmdRally(ME, b.id, wx, wy));
+  const onWell = producers.some((b) => b.rally?.well != null);
+  if (results.every((r) => r === 'cleared')) notify('Rally point cleared.');
+  else {
+    const n = producers.length > 1 ? ` for ${producers.length} structures` : '';
+    notify(onWell ? `Rally point set on an oil well${n}: new trucks will harvest it.` : `Rally point set${n}. New units will deploy there.`);
+    marker(wx, wy, onWell ? '#ffd34d' : '#7dff8a');
+  }
+  refreshSidebar(true);
+  return true;
+}
+
+function startRallyMode() {
+  if (!selectedProducers().length) return;
+  ui.rallyMode = true;
+  view.classList.add('cursor-attack');
+  notify('Click where new units should deploy. Right-click or Esc to cancel.');
+}
+
+function endRallyMode() {
+  ui.rallyMode = false;
+  view.classList.remove('cursor-attack');
+}
 
 function attackMoveTo(wx, wy) {
   const ids = myUnits().filter((u) => u.def.weapon).map((u) => u.id);
@@ -247,6 +279,7 @@ view.addEventListener('pointerdown', (e) => {
   if (e.button === 2) {
     if (ui.placing) { ui.placing = null; ui.lineStart = ui.lineTiles = null; return; }
     if (ui.attackMove) { ui.attackMove = false; view.classList.remove('cursor-attack'); return; }
+    if (ui.rallyMode) { endRallyMode(); return; }
     issueContextOrder(w.x, w.y, entityAt(e.offsetX, e.offsetY));
     return;
   }
@@ -269,6 +302,7 @@ view.addEventListener('pointerdown', (e) => {
     return;
   }
   if (ui.attackMove) { attackMoveTo(w.x, w.y); return; }
+  if (ui.rallyMode) { setRally(w.x, w.y); endRallyMode(); return; }
   ui.drag = { x0: e.offsetX, y0: e.offsetY, x1: e.offsetX, y1: e.offsetY, shift: e.shiftKey };
 });
 
@@ -345,8 +379,8 @@ window.addEventListener('keydown', (e) => {
       game.cmdStop(ME, myUnits().map((u) => u.id));
       break;
     case 'escape':
-      if (ui.placing || ui.attackMove) {
-        ui.placing = null; ui.attackMove = false; ui.lineStart = ui.lineTiles = null; view.classList.remove('cursor-attack');
+      if (ui.placing || ui.attackMove || ui.rallyMode) {
+        ui.placing = null; ui.attackMove = false; ui.rallyMode = false; ui.lineStart = ui.lineTiles = null; view.classList.remove('cursor-attack');
       } else {
         ui.selected.clear();
       }
@@ -517,7 +551,7 @@ function refreshSidebar(force = false) {
 
   // Selection panel.
   const sel = selectedEntities();
-  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${game.tick - (e.repairedAt ?? -1e9) < 10}`).join('|');
+  const key = sel.map((e) => `${e.id}:${Math.ceil(e.hp / 10)}:${e.order?.type}:${e.harvestState}:${Math.round(e.cargo || 0)}:${e.repairing}:${e.repairStalled}:${e.rally ? e.rally.x.toFixed(1) + ',' + e.rally.y.toFixed(1) + ',' + e.rally.well : '-'}:${game.tick - (e.repairedAt ?? -1e9) < 10}`).join('|');
   if (!force && key === lastSidebarKey) return;
   lastSidebarKey = key;
   if (!sel.length) { sidebar.sel.innerHTML = '<div class="hint">Nothing selected.</div>'; return; }
@@ -536,6 +570,11 @@ function refreshSidebar(force = false) {
       if (e.progress < 1) detail += `<div>Under construction: ${Math.round(e.progress * 100)}%</div>`;
       if (e.queue?.length) detail += `<div>Queue: ${e.queue.map((q) => UNITS[q.type].name).join(', ')}</div>`;
       if (e.def.repairs) detail += `<div class="hint">Repairs ${{ ground: 'vehicles', air: 'aircraft', naval: 'ships' }[e.def.repairs]} nearby</div>`;
+      if (e.owner === ME && e.def.produces) {
+        const status = !e.rally ? 'none' : e.rally.well != null ? 'oil well (new trucks harvest it)' : 'set';
+        detail += `<div>Rally point: ${status}</div>`;
+        detail += `<div class="btn-row"><button class="small" data-rallyset="1">Set rally point</button>${e.rally ? '<button class="small" data-rallyclear="1">Clear</button>' : ''}</div>`;
+      }
       if (e.owner === ME && e.progress >= 1) {
         if (e.repairing) detail += `<div class="${e.repairStalled ? 'warn-text' : 'ok-text'}">${e.repairStalled ? 'Repair paused: insufficient funds' : 'Repairing…'}</div>`;
         let btns = '';
@@ -551,9 +590,12 @@ function refreshSidebar(force = false) {
   } else {
     const counts = {};
     for (const e of sel) counts[e.def.name] = (counts[e.def.name] || 0) + 1;
-    sidebar.sel.innerHTML = `<div class="sel-title">${sel.length} units</div>` +
+    const producers = selectedProducers();
+    sidebar.sel.innerHTML = `<div class="sel-title">${sel.length} selected</div>` +
       Object.entries(counts).map(([n, c]) => `<div>${c} × ${n}</div>`).join('') +
-      '<div class="hint">A: attack-move · S: stop · Ctrl+1-9: group</div>';
+      (producers.length && producers.length === sel.length
+        ? `<div class="btn-row"><button class="small" data-rallyset="1">Set rally point (${producers.length})</button><button class="small" data-rallyclear="1">Clear</button></div>`
+        : '<div class="hint">A: attack-move · S: stop · Ctrl+1-9: group</div>');
   }
 }
 
@@ -637,6 +679,11 @@ $('sidebar').addEventListener('pointerdown', (e) => {
       if (!ok) notify(game.players[ME].credits < UNITS[type].cost ? 'Insufficient funds.' : 'Production queue full.', true);
       else audio.blip(990);
     }
+  } else if (btn.dataset.rallyset) {
+    startRallyMode();
+  } else if (btn.dataset.rallyclear) {
+    for (const b of selectedProducers()) b.rally = null;
+    notify('Rally point cleared.');
   } else if (btn.dataset.repair) {
     game.cmdRepair(ME, Number(btn.dataset.repair));
   } else if (btn.dataset.sell) {

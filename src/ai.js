@@ -342,6 +342,10 @@ export class AIController {
       const enemyStart = g.map.starts[1 - this.id];
       const ang = Math.atan2(enemyStart.y - hq.y, enemyStart.x - hq.x);
       const rx = hq.x + Math.cos(ang) * 7, ry = hq.y + Math.sin(ang) * 7;
+      // New units head straight there.
+      for (const pb of this.mine((e) => e.kind === 'building' && e.def.produces && e.type !== 'hq' && e.type !== 'shipyard')) {
+        if (!pb.rally || Math.hypot(pb.rally.x - rx, pb.rally.y - ry) > 2) g.cmdRally(this.id, pb.id, rx, ry);
+      }
       const stray = ready.filter((u) => u.def.domain !== 'naval' && Math.hypot(u.x - rx, u.y - ry) > 5);
       if (stray.length) g.cmdMove(this.id, stray.map((u) => u.id), rx, ry);
     }

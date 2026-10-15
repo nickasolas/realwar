@@ -55,6 +55,12 @@ npm start            # http://localhost:8080
   computer walls in its own base once its core structures are up, with
   gates facing you, its oil wells and the main road, and a paved road out
   through the main gate; it rebuilds segments you knock down.
+- **Rally points:** select one or more production structures and
+  right-click the ground (or press *Set rally point*). New units deploy
+  there, spreading out around the flag; armed units attack-move so they
+  fight on the way. Rally a Command Center or Vehicle Plant onto an oil
+  well to send new trucks to that well. Right-click the structure itself
+  (or *Clear*) to remove it.
 - **Win:** destroy every enemy structure (walls and gates don't count).
 
 ### Controls

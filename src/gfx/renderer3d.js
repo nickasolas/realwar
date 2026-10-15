@@ -135,12 +135,8 @@ export class Renderer3D {
     this.ghost.visible = false;
     this.scene.add(this.ghost);
 
-    this.rallyLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: '#7dff8a', dashSize: 0.3, gapSize: 0.2, depthTest: false, transparent: true }));
-    this.rallyFlag = new THREE.Group();
-    this.rallyFlag.add(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 6).translate(0, 0.4, 0), new THREE.MeshBasicMaterial({ color: '#ddd' })));
-    this.rallyFlag.add(new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.22).translate(0.18, 0.68, 0), new THREE.MeshBasicMaterial({ color: '#7dff8a', side: THREE.DoubleSide })));
-    this.rallyLine.visible = this.rallyFlag.visible = false;
-    this.scene.add(this.rallyLine, this.rallyFlag);
+    // Rally markers (flag + dashed line) are pooled: one per selected structure.
+    this.rallyPool = [];
 
     // Scorch decals.
     const c = document.createElement('canvas');
@@ -712,16 +708,24 @@ export class Renderer3D {
     }
     for (let i = k; i < this.markerPool.length; i++) this.markerPool[i].visible = false;
 
-    // Rally point of a selected structure.
-    const b = [...ui.selected].map((id) => this.game.get(id)).find((e) => e && e.kind === 'building' && e.owner === this.viewer && e.rally);
-    this.rallyLine.visible = this.rallyFlag.visible = !!b;
-    if (b) {
-      const a = new THREE.Vector3(b.x, this.views.get(b.id).root.position.y + 0.5, b.y);
-      const c = new THREE.Vector3(b.rally.x, this.hf.groundAt(b.rally.x, b.rally.y), b.rally.y);
-      this.rallyLine.geometry.setFromPoints([a, c.clone().setY(c.y + 0.2)]);
-      this.rallyLine.computeLineDistances();
-      this.rallyFlag.position.copy(c);
+    // Rally points of every selected structure: green, or gold on an oil well.
+    let r = 0;
+    for (const id of ui.selected) {
+      const e = this.game.get(id);
+      if (!e || e.kind !== 'building' || e.owner !== this.viewer || !e.rally) continue;
+      const m = this.rallyMarker(r++);
+      const gold = e.rally.well != null;
+      m.line.material.color.set(gold ? '#ffd34d' : '#7dff8a');
+      m.cloth.material.color.set(gold ? '#ffd34d' : '#7dff8a');
+      const a = new THREE.Vector3(e.x, (this.views.get(e.id)?.root.position.y ?? 0) + 0.5, e.y);
+      const c = new THREE.Vector3(e.rally.x, this.hf.groundAt(e.rally.x, e.rally.y), e.rally.y);
+      m.line.geometry.setFromPoints([a, c.clone().setY(c.y + 0.2)]);
+      m.line.computeLineDistances();
+      m.flag.position.copy(c);
+      m.cloth.rotation.y = Math.sin(this.time * 3 + r) * 0.25;
+      m.line.visible = m.flag.visible = true;
     }
+    for (let i = r; i < this.rallyPool.length; i++) this.rallyPool[i].line.visible = this.rallyPool[i].flag.visible = false;
   }
 
   // Rebuild the road surface mesh when the map's roads change.
@@ -778,6 +782,21 @@ export class Renderer3D {
     this.roadMesh.receiveShadow = true;
     this.roadMesh.renderOrder = 1;
     this.scene.add(this.roadMesh);
+  }
+
+  rallyMarker(i) {
+    if (!this.rallyPool[i]) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+        new THREE.LineDashedMaterial({ color: '#7dff8a', dashSize: 0.3, gapSize: 0.2, depthTest: false, transparent: true }));
+      line.renderOrder = 6;
+      const flag = new THREE.Group();
+      flag.add(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 6).translate(0, 0.4, 0), new THREE.MeshBasicMaterial({ color: '#ddd' })));
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.22).translate(0.18, 0.68, 0), new THREE.MeshBasicMaterial({ color: '#7dff8a', side: THREE.DoubleSide }));
+      flag.add(cloth);
+      this.scene.add(line, flag);
+      this.rallyPool[i] = { line, flag, cloth };
+    }
+    return this.rallyPool[i];
   }
 
   updatePlacement(ui) {
