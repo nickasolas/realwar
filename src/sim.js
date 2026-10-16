@@ -1,7 +1,7 @@
 import {
   DT, TICK_RATE, UNITS, BUILDINGS, WEAPONS, FACTIONS, STARTING_CREDITS,
   TRUCK_CAPACITY, HARVEST_RATE, BUILD_RADIUS, REPAIR, ROAD, MAX_LINE, ECONOMY,
-  RESEARCH, TECHS,
+  RESEARCH, TECHS, CHEATS,
 } from './config.js';
 import { generateMap } from './map.js';
 import { Terrain } from './config.js';
@@ -55,7 +55,7 @@ export class Game {
       research: { points: 0, done: new Set() },
       visible: new Uint8Array(this.map.w * this.map.h),
       explored: new Uint8Array(this.map.w * this.map.h),
-      stats: { killed: 0, lost: 0, harvested: 0, repairSpent: 0 },
+      stats: { killed: 0, lost: 0, harvested: 0, repairSpent: 0, cheated: false },
     }));
     for (const p of this.players) this.setupBase(p);
     this.updateFog();
@@ -553,6 +553,43 @@ export class Game {
       if (d < bestD) { bestD = d; best = e; }
     }
     return best;
+  }
+
+  // ------------------------------------------------------------- cheats
+
+  cmdCheatCredits(playerId, amount) {
+    const p = this.players[playerId];
+    if (!p || p.defeated || !CHEATS.credits.includes(amount)) return false;
+    p.credits += amount;
+    p.stats.cheated = true;
+    return true;
+  }
+
+  // Drop `count` free units of an allowed type beside the Command Center
+  // (or any structure if it's gone). Returns the units placed.
+  cmdCheatUnits(playerId, type, count) {
+    const p = this.players[playerId];
+    if (!p || p.defeated || !CHEATS.units.includes(type) || !CHEATS.counts.includes(count)) return [];
+    const blds = [...this.entities.values()].filter((e) => e.owner === playerId && e.kind === 'building' && !e.def.segment);
+    const home = blds.find((b) => b.type === 'hq') || blds[0];
+    if (!home) return [];
+    const placed = [];
+    // Spiral out from just in front of the structure, onto free ground.
+    const cx = home.x, cy = home.ty + home.h + 1.5;
+    for (let i = 0; placed.length < count && i < count * 12; i++) {
+      const a = i * 2.39996, r = 0.75 * Math.sqrt(i);
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      if (!this.map.passable(Math.floor(x), Math.floor(y), 'ground', playerId)) continue;
+      if (placed.some((u) => Math.hypot(u.x - x, u.y - y) < 0.7)) continue;
+      const u = this.addUnit(playerId, type, x, y);
+      u.order = { type: 'idle', home: { x, y } };
+      placed.push(u);
+    }
+    if (placed.length) {
+      p.stats.cheated = true;
+      this.events.push({ type: 'unitReady', owner: playerId, unit: type, x: cx, y: cy });
+    }
+    return placed;
   }
 
   // Sell a structure for half its cost.

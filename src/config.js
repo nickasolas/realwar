@@ -34,6 +34,9 @@ export const FACTIONS = [
   { id: 3, name: 'Southern Union', short: 'SU', color: '#3fc6a0', dark: '#1d7560' },
 ];
 
+// Cheat panel: what it can hand out.
+export const CHEATS = { credits: [1000, 5000, 10000], units: ['tank', 'infantry'], counts: [1, 5, 10] };
+
 // Menu choices for a skirmish.
 export const MAP_SIZES = { small: 96, medium: 128, large: 160, huge: 192 };
 export const MAX_OPPONENTS = 3;

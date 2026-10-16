@@ -1,4 +1,4 @@
-import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH, MAP_SIZES } from './config.js';
+import { DT, UNITS, BUILDINGS, BUILD_ORDER_MENU, FORTIFICATION_MENU, ROAD, WEAPONS, TECHS, TECH_ORDER, RESEARCH, MAP_SIZES, CHEATS } from './config.js';
 import { lineTiles } from './map.js';
 import { Game, cargoSize } from './sim.js';
 import { AIController } from './ai.js';
@@ -53,6 +53,7 @@ function startGame() {
     $('loading').classList.add('hidden');
     $('menu').classList.add('hidden');
     $('endscreen').classList.add('hidden');
+    toggleCheats(false);
     running = true;
     paused = false;
     audio.unlock();
@@ -470,6 +471,9 @@ window.addEventListener('keydown', (e) => {
     }
     case 'l':
       startLaunchMode();
+      break;
+    case '`':
+      toggleCheats();
       break;
     case 'u': {
       const landers = myUnits().filter((u) => u.def.capacity && u.passengers?.length);
@@ -892,6 +896,7 @@ function showEnd() {
     ${row('Losses', (s) => s.lost)}
     ${row('Oil harvested', (s) => `$${s.harvested}`)}
     ${row('Spent on repairs', (s) => `$${Math.round(s.repairSpent)}`)}
+    ${ps.some((p) => p.stats.cheated) ? row('Cheats used', (s) => (s.cheated ? 'Yes' : 'No')) : ''}
     <tr><td>Mission time</td><td colspan="${ps.length}">${Math.floor(t / 60)}m ${t % 60}s</td></tr>`;
   $('endscreen').classList.remove('hidden');
 }
@@ -933,6 +938,45 @@ function frame(now) {
 
 $('start').addEventListener('click', startGame);
 $('again').addEventListener('click', () => { $('endscreen').classList.add('hidden'); $('menu').classList.remove('hidden'); });
+// ------------------------------------------------------------- cheats
+
+let cheatCount = CHEATS.counts[1];
+function renderCheats() {
+  $('cheat-money').innerHTML = CHEATS.credits.map((c) => `<button class="small" data-cheat-money="${c}">+$${c.toLocaleString()}</button>`).join('');
+  $('cheat-count').innerHTML = CHEATS.counts.map((n) => `<button class="small${n === cheatCount ? ' on' : ''}" data-cheat-count="${n}">×${n}</button>`).join('');
+  $('cheat-units').innerHTML = CHEATS.units.map((t) => `<button class="small" data-cheat-unit="${t}">${UNITS[t].name}${cheatCount > 1 ? 's' : ''}</button>`).join('');
+}
+function toggleCheats(show) {
+  const el = $('cheats');
+  const open = show ?? el.classList.contains('hidden');
+  el.classList.toggle('hidden', !open);
+  if (open) renderCheats();
+}
+$('btn-cheats').addEventListener('click', () => { if (game) toggleCheats(); });
+$('cheats').addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  const b = e.target.closest('button');
+  if (!b || !game) return;
+  if (b.dataset.cheatClose) toggleCheats(false);
+  else if (b.dataset.cheatMoney) {
+    const amt = Number(b.dataset.cheatMoney);
+    if (game.cmdCheatCredits(ME, amt)) { notify(`Cheat: +$${amt.toLocaleString()}.`); audio.blip(1300); refreshSidebar(true); }
+  } else if (b.dataset.cheatCount) {
+    cheatCount = Number(b.dataset.cheatCount);
+    renderCheats();
+  } else if (b.dataset.cheatUnit) {
+    const type = b.dataset.cheatUnit;
+    const placed = game.cmdCheatUnits(ME, type, cheatCount);
+    if (placed.length) {
+      notify(`Cheat: ${placed.length} × ${UNITS[type].name} deployed.`);
+      // Select the new arrivals so they're ready for orders.
+      ui.selected.clear();
+      for (const u of placed) ui.selected.add(u.id);
+      refreshSidebar(true);
+    } else notify('No room to deploy units.', true);
+  }
+});
+
 $('btn-menu').addEventListener('click', () => {
   paused = true;
   $('menu').classList.remove('hidden');

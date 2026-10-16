@@ -597,3 +597,24 @@ test('on islands the AI builds a navy instead of marching on the enemy', () => {
   assert.ok(find(g, 1, 'shipyard'), 'built a Naval Yard');
   assert.ok(ships > 0, 'has warships');
 });
+
+test('cheats add money and free tanks or infantry beside the Command Center', () => {
+  const g = new Game({ seed: 3 });
+  const p = g.players[0];
+  const before = p.credits;
+  assert.ok(g.cmdCheatCredits(0, 5000));
+  assert.equal(p.credits, before + 5000);
+  assert.equal(g.cmdCheatCredits(0, 123), false, 'only the offered amounts');
+  const tanks = g.cmdCheatUnits(0, 'tank', 10);
+  assert.equal(tanks.length, 10);
+  const hq = find(g, 0, 'hq');
+  for (const u of tanks) {
+    assert.equal(u.owner, 0);
+    assert.ok(Math.hypot(u.x - hq.x, u.y - hq.y) < 8, 'near the HQ');
+    assert.ok(g.map.passable(Math.floor(u.x), Math.floor(u.y), 'ground'), 'on open ground');
+  }
+  assert.equal(g.cmdCheatUnits(0, 'infantry', 5).length, 5);
+  assert.equal(g.cmdCheatUnits(0, 'bomber', 5).length, 0, 'only tanks or infantry');
+  assert.equal(p.credits, before + 5000, 'units are free');
+  assert.equal(p.stats.cheated, true);
+});

@@ -107,6 +107,10 @@ npm start            # http://localhost:8080
     launch and the target.
   The computer researches too and fields all of it. Tuning lives in
   `RESEARCH`, `TECHS` and the unit and building tables in `src/config.js`.
+- **Cheats:** press **`** (backtick) or the *Cheats* button for a panel that
+  adds $1,000 / $5,000 / $10,000, or deploys 1, 5 or 10 free Battle Tanks or
+  Rifle Squads beside your Command Center (they arrive selected). The game
+  keeps running while it's open, and the end screen notes any cheat use.
 - **Win:** destroy every enemy structure (walls and gates don't count).
 
 ### Controls
@@ -120,6 +124,7 @@ npm start            # http://localhost:8080
 | R | Repair selected structure, or send selected units for repairs |
 | L | Launch a charged ICBM Silo (then click the target) |
 | U | Unload the selected landing craft where it is |
+| ` | Open or close the cheat panel |
 | Ctrl+1–9, 1–9 | Assign / recall group (press twice to center) |
 | Arrows, screen edge, middle-drag, wheel | Scroll and zoom |
 | P, +/-, M, Del | Pause, game speed, mute, sell structure |
